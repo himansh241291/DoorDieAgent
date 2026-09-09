@@ -1,0 +1,12 @@
+[Unit]
+Description=NSE Paper Agent daily maintenance
+[Service]
+Type=oneshot
+User=nse-paper
+Group=nse-paper
+EnvironmentFile=/etc/nse-paper-agent/nse-paper-agent.env
+ExecStart=/opt/nse-paper-agent/.venv/bin/python /opt/nse-paper-agent/scripts/daily_maintenance.py --config /etc/nse-paper-agent/production.paper.yaml
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/nse-paper-agent /var/backups/nse-paper-agent /var/log/nse-paper-agent
