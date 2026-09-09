@@ -1,0 +1,25 @@
+version: baseline-breakout-v1
+activation: production
+indicator_parameters:
+  sma_period: 20
+  rsi_period: 14
+signal_rules:
+  long_only: true
+  close_above_sma_cross: true
+  rsi_min_exclusive: 50
+  rsi_max_exclusive: 70
+  min_price: 20
+  min_turnover: 1000000
+  min_relative_volume: 0.8
+  entry_cutoff: "14:45"
+sizing_rules:
+  gross_cap: 10000
+  risk_per_trade: 0.003
+  no_pyramiding: true
+  no_averaging_down: true
+validation:
+  min_closed_trades: 50
+  require_oos: true
+  require_shadow: true
+  require_human_approval: true
+effective_date: 2026-01-01
