@@ -1,0 +1,13 @@
+challengers:
+  - version: trend-pullback-example-v1
+    enabled: false
+    description: Higher-timeframe trend + pullback continuation; shadow only.
+  - version: sector-relative-strength-example-v1
+    enabled: false
+    description: Sector-relative strength ranking; shadow only.
+  - version: volatility-contraction-breakout-example-v1
+    enabled: false
+    description: Volatility contraction then breakout; shadow only.
+  - version: positive-regime-mean-reversion-example-v1
+    enabled: false
+    description: Mean reversion only in confirmed positive regime; shadow only.
