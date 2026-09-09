@@ -1,0 +1,72 @@
+app:
+  name: nse-paper-agent
+  timezone: Asia/Kolkata
+  mode: paper
+  debug: false
+  allow_test_data: false
+account:
+  starting_capital: 50000.0
+  minimum_cash_reserve: 2000.0
+  max_open_positions: 5
+  max_gross_position: 10000.0
+  buy_fee: 20.0
+  sell_fee: 20.0
+  risk_per_trade: 0.003
+risk:
+  hard_stop_pct: 0.015
+  take_profit_pct: 0.05
+  daily_loss_limit_pct: 0.02
+  rolling_drawdown_pct: 0.04
+  rolling_drawdown_days: 5
+  rolling_block_hours: 48
+  stop_cooldown_minutes: 120
+  slippage_bps: 10
+  max_spread_bps: 50
+session:
+  open: "09:15"
+  close: "15:30"
+  entry_cutoff: "14:45"
+  calendar_path: config/nse_holidays.yaml
+market:
+  benchmark: NIFTY50
+  bar_interval_minutes: 5
+  minimum_price: 20.0
+  minimum_turnover: 1000000.0
+  minimum_relative_volume: 0.8
+  regime:
+    cautious_size_factor: 0.5
+    range_bound_shadow_only: true
+sentiment:
+  enabled: true
+  neutral_if_unavailable: true
+  stale_after_minutes: 30
+  min_score: 0.10
+  weights:
+    trend: 0.35
+    breadth: 0.25
+    relative_strength: 0.20
+    volume_confirmation: 0.10
+    news: 0.10
+execution:
+  use_last_price_if_quote_missing: true
+  last_price_slippage_bps: 25
+  gap_stop_use_worst_observed_bid: true
+safety:
+  global_kill_switch: false
+  emergency_kill_file: /etc/nse-paper-agent/KILL_SWITCH
+  require_human_approval_for_promotion: true
+  production_config_immutable_risk_hash: ""
+persistence:
+  database: /var/lib/nse-paper-agent/state.sqlite3
+  backup_dir: /var/backups/nse-paper-agent
+logging:
+  directory: /var/log/nse-paper-agent
+  level: INFO
+  max_bytes: 10485760
+  backup_count: 10
+notifications:
+  enabled: false
+  webhook_url_env: NSE_PAPER_WEBHOOK_URL
+strategy:
+  production: config/strategies/baseline_breakout_v1.yaml
+  challengers: config/strategies/challenger_examples.yaml
