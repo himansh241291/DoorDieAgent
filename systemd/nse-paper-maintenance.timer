@@ -1,0 +1,7 @@
+[Unit]
+Description=Run NSE Paper Agent maintenance after market close
+[Timer]
+OnCalendar=Mon..Fri 18:00:00 Asia/Kolkata
+Persistent=true
+[Install]
+WantedBy=timers.target
