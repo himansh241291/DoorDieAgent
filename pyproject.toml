@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools==75.6.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nse-paper-agent"
+version = "0.1.0"
+description = "Survival-first autonomous NSE equity paper-trading research agent"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+  "PyYAML==6.0.2",
+]
+
+[project.optional-dependencies]
+test = [
+  "pytest==8.3.5",
+  "pytest-cov==6.0.0",
+]
+
+[project.scripts]
+nse-paper-agent = "nse_paper_agent.main:main"
+nse-paper-health = "nse_paper_agent.monitoring.health:main"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.setuptools.packages.find]
+where = ["src"]
