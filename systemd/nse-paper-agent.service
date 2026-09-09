@@ -1,0 +1,22 @@
+[Unit]
+Description=NSE Paper Trading Research Agent (SIMULATION ONLY)
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=simple
+User=nse-paper
+Group=nse-paper
+EnvironmentFile=/etc/nse-paper-agent/nse-paper-agent.env
+ExecStart=/opt/nse-paper-agent/.venv/bin/nse-paper-agent --config /etc/nse-paper-agent/production.paper.yaml
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/nse-paper-agent /var/log/nse-paper-agent /var/backups/nse-paper-agent /run/nse-paper-agent
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+[Install]
+WantedBy=multi-user.target
