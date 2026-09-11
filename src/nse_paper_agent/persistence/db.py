@@ -3,10 +3,13 @@ import sqlite3,json,shutil
 from contextlib import contextmanager
 from pathlib import Path
 from datetime import datetime,timezone
-SCHEMA_VERSION=1
+from zoneinfo import ZoneInfo
+
+IST=ZoneInfo("Asia/Kolkata")
+SCHEMA_VERSION=2
 SCHEMA='''
 CREATE TABLE IF NOT EXISTS schema_meta(version INTEGER NOT NULL);
-CREATE TABLE IF NOT EXISTS account_snapshots(id INTEGER PRIMARY KEY,ts_utc TEXT NOT NULL,ts_ist TEXT NOT NULL,cash REAL NOT NULL,equity REAL NOT NULL,gross REAL NOT NULL,daily_start_equity REAL NOT NULL,drawdown5 REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS account_snapshots(id INTEGER PRIMARY KEY,ts_utc TEXT NOT NULL,ts_ist TEXT NOT NULL,trading_date TEXT NOT NULL DEFAULT '',is_eod INTEGER NOT NULL DEFAULT 0,cash REAL NOT NULL,equity REAL NOT NULL,gross REAL NOT NULL,daily_start_equity REAL NOT NULL,drawdown5 REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS positions(symbol TEXT PRIMARY KEY,qty INTEGER NOT NULL,entry_price REAL NOT NULL,stop_price REAL NOT NULL,target_price REAL NOT NULL,entry_fee REAL NOT NULL,strategy_version TEXT NOT NULL,entry_ts_utc TEXT NOT NULL,last_mark REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS simulated_fills(id INTEGER PRIMARY KEY AUTOINCREMENT,idempotency_key TEXT UNIQUE NOT NULL,symbol TEXT NOT NULL,side TEXT NOT NULL,qty INTEGER NOT NULL,price REAL NOT NULL,fee REAL NOT NULL,ts_utc TEXT NOT NULL,strategy_version TEXT NOT NULL,slippage_estimate REAL NOT NULL,reason TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS closed_trades(id INTEGER PRIMARY KEY AUTOINCREMENT,symbol TEXT NOT NULL,qty INTEGER NOT NULL,entry_price REAL NOT NULL,exit_price REAL NOT NULL,entry_fee REAL NOT NULL,exit_fee REAL NOT NULL,gross_pnl REAL NOT NULL,net_pnl REAL NOT NULL,entry_ts_utc TEXT NOT NULL,exit_ts_utc TEXT NOT NULL,strategy_version TEXT NOT NULL,exit_reason TEXT NOT NULL,holding_seconds INTEGER NOT NULL,mae REAL,mfe REAL);
@@ -31,7 +34,87 @@ class Database:
         self.path=path; Path(path).parent.mkdir(parents=True,exist_ok=True); self.conn=sqlite3.connect(path,isolation_level=None,check_same_thread=False); self.conn.row_factory=sqlite3.Row; self._in_transaction=False
         self.conn.execute("PRAGMA journal_mode=WAL"); self.conn.execute("PRAGMA foreign_keys=ON"); self.conn.execute("PRAGMA synchronous=FULL")
     def initialize(self):
-        with self.conn: self.conn.executescript(SCHEMA); self.conn.execute("INSERT INTO schema_meta(version) SELECT ? WHERE NOT EXISTS (SELECT 1 FROM schema_meta)",(SCHEMA_VERSION,))
+        with self.conn:
+            self.conn.executescript(SCHEMA)
+
+            version_row = self.conn.execute(
+                "SELECT version FROM schema_meta ORDER BY version DESC LIMIT 1"
+            ).fetchone()
+
+            if version_row is None:
+                self.conn.execute(
+                    "INSERT INTO schema_meta(version) VALUES(?)",
+                    (SCHEMA_VERSION,),
+                )
+            else:
+                current = int(version_row["version"])
+
+                if current < 2:
+                    columns = {
+                        row["name"]
+                        for row in self.conn.execute(
+                            "PRAGMA table_info(account_snapshots)"
+                        ).fetchall()
+                    }
+
+                    if "trading_date" not in columns:
+                        self.conn.execute(
+                            "ALTER TABLE account_snapshots "
+                            "ADD COLUMN trading_date TEXT NOT NULL DEFAULT ''"
+                        )
+
+                    if "is_eod" not in columns:
+                        self.conn.execute(
+                            "ALTER TABLE account_snapshots "
+                            "ADD COLUMN is_eod INTEGER NOT NULL DEFAULT 0"
+                        )
+
+                    # Backfill the NSE trading date and normalize the IST
+                    # representation of legacy UTC timestamps. Existing
+                    # historical rows remain is_eod=0 deliberately: we must
+                    # never fabricate completed EOD marks from old data.
+                    rows = self.conn.execute(
+                        "SELECT id, ts_utc FROM account_snapshots"
+                    ).fetchall()
+
+                    for row in rows:
+                        raw = row["ts_utc"]
+                        dt = datetime.fromisoformat(raw)
+
+                        if dt.tzinfo is None:
+                            dt = dt.replace(tzinfo=timezone.utc)
+
+                        ist = dt.astimezone(IST)
+
+                        self.conn.execute(
+                            """
+                            UPDATE account_snapshots
+                            SET trading_date=?, ts_ist=?
+                            WHERE id=?
+                            """,
+                            (
+                                ist.date().isoformat(),
+                                ist.isoformat(),
+                                row["id"],
+                            ),
+                        )
+
+                    self.conn.execute(
+                        "UPDATE schema_meta SET version=?",
+                        (SCHEMA_VERSION,),
+                    )
+
+            # This constraint must exist for BOTH newly-created databases
+            # and databases migrated from schema version 1.
+            #
+            # Without it, INSERT OR IGNORE cannot guarantee that only one
+            # completed EOD mark exists for an NSE trading date.
+            self.conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS "
+                "idx_account_snapshots_eod_date "
+                "ON account_snapshots(trading_date) "
+                "WHERE is_eod=1 AND trading_date <> ''"
+            )
     @contextmanager
     def transaction(self):
         if self._in_transaction: raise RuntimeError("nested database transaction is not supported")

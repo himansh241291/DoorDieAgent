@@ -16,13 +16,45 @@ class RiskEngine:
         start=self.repo.db.get_state("daily_start_equity",50000.0); return equity<=start*(1-self.cfg["risk"]["daily_loss_limit_pct"])
     def rolling_drawdown_blocked(self,now):
         block_until=self.repo.db.get_state("rolling_block_until")
-        if block_until and __import__('datetime').datetime.fromisoformat(block_until)>now: return True
-        rows=self.repo.db.conn.execute("SELECT equity FROM account_snapshots ORDER BY ts_utc DESC LIMIT ?",(self.cfg["risk"]["rolling_drawdown_days"],)).fetchall(); vals=[float(r[0]) for r in reversed(rows)]
-        if len(vals)<self.cfg["risk"]["rolling_drawdown_days"]: return False
-        peak=vals[0]; dd=0.0
-        for value in vals: peak=max(peak,value); dd=max(dd,(peak-value)/peak if peak else 0.0)
+        if block_until:
+            block_until_ts=__import__('datetime').datetime.fromisoformat(block_until)
+            if block_until_ts.tzinfo is None:
+                block_until_ts=block_until_ts.replace(tzinfo=now.tzinfo)
+            if block_until_ts>now:
+                return True
+
+        marks=self.repo.eod_marks(self.cfg["risk"]["rolling_drawdown_days"])
+        vals=[float(mark["equity"]) for mark in reversed(marks)]
+
+        if len(vals)<self.cfg["risk"]["rolling_drawdown_days"]:
+            return False
+
+        peak=vals[0]
+        dd=0.0
+
+        for value in vals:
+            peak=max(peak,value)
+            dd=max(dd,(peak-value)/peak if peak else 0.0)
+
         if dd>=self.cfg["risk"]["rolling_drawdown_pct"]:
-            self.repo.db.set_state("rolling_block_until",(now+timedelta(hours=self.cfg["risk"]["rolling_block_hours"])).isoformat()); return True
+            self.repo.db.set_state(
+                "rolling_block_until",
+                (now+timedelta(hours=self.cfg["risk"]["rolling_block_hours"])).isoformat(),
+            )
+            self.repo.record_risk(
+                now,
+                "ROLLING_DRAWDOWN_BLOCK",
+                False,
+                "rolling_drawdown_circuit_breaker",
+                {
+                    "drawdown": dd,
+                    "threshold": self.cfg["risk"]["rolling_drawdown_pct"],
+                    "completed_eod_marks": len(vals),
+                    "block_hours": self.cfg["risk"]["rolling_block_hours"],
+                },
+            )
+            return True
+
         return False
     def can_buy(self,now,quotes,equity,regime):
         if self.emergency_killed(): return RiskDecision(False,"kill_switch")

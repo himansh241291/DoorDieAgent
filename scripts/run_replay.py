@@ -50,8 +50,16 @@ def snapshot(repo, risk, quotes, now):
     equity = risk.equity(quotes)
     gross = equity - repo.cash()
 
+    # Replay snapshots are intraday marks, not completed EOD marks.
+    # Preserve the NSE trading date and use the symbol-specific
+    # checkpoint as before.
+    symbol = next(iter(quotes))
+    trading_date = now.astimezone(
+        __import__("zoneinfo").ZoneInfo("Asia/Kolkata")
+    ).date().isoformat()
+
     repo.record_account_snapshot_and_checkpoint(
-        symbol=next(iter(quotes)),
+        symbol=symbol,
         bar_end=now,
         cash=repo.cash(),
         equity=equity,
@@ -61,6 +69,8 @@ def snapshot(repo, risk, quotes, now):
             50000.0,
         ),
         drawdown5=0.0,
+        trading_date=trading_date,
+        is_eod=False,
     )
 
 

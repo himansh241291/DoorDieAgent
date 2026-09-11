@@ -1,10 +1,15 @@
 from __future__ import annotations
 import json
 from datetime import timezone
+from zoneinfo import ZoneInfo
 from decimal import Decimal
 from nse_paper_agent.domain.models import Position
 from .db import Database
+IST=ZoneInfo("Asia/Kolkata")
+
 def iso(ts): return ts.astimezone(timezone.utc).isoformat()
+
+def iso_ist(ts): return ts.astimezone(IST).isoformat()
 class Repository:
     def __init__(self,db:Database): self.db=db
     def cash(self): return float(self.db.get_state("cash",50000.0))
@@ -72,19 +77,36 @@ class Repository:
         gross,
         daily_start_equity,
         drawdown5,
+        trading_date=None,
+        is_eod=False,
     ):
         checkpoint_key = f"checkpoint:{symbol}"
+
+        if trading_date is None:
+            trading_date = bar_end.astimezone(IST).date().isoformat()
 
         with self.db.transaction():
             self.db.conn.execute(
                 """
                 INSERT INTO account_snapshots
-                (ts_utc, ts_ist, cash, equity, gross, daily_start_equity, drawdown5)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                (
+                    ts_utc,
+                    ts_ist,
+                    trading_date,
+                    is_eod,
+                    cash,
+                    equity,
+                    gross,
+                    daily_start_equity,
+                    drawdown5
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     iso(bar_end),
-                    bar_end.isoformat(),
+                    iso_ist(bar_end),
+                    str(trading_date),
+                    int(is_eod),
                     float(cash),
                     float(equity),
                     float(gross),
@@ -94,3 +116,83 @@ class Repository:
             )
 
             self.db.set_state(checkpoint_key, iso(bar_end))
+
+    def record_eod_snapshot(
+        self,
+        trading_date,
+        ts,
+        cash,
+        equity,
+        gross,
+        daily_start_equity,
+        drawdown5,
+    ):
+        """
+        Persist exactly one completed EOD equity mark per trading date.
+
+        The partial unique index on (trading_date) for is_eod=1 makes
+        repeated EOD processing idempotent at the database layer.
+        """
+        with self.db.transaction():
+            cursor = self.db.conn.execute(
+                """
+                INSERT OR IGNORE INTO account_snapshots
+                (
+                    ts_utc,
+                    ts_ist,
+                    trading_date,
+                    is_eod,
+                    cash,
+                    equity,
+                    gross,
+                    daily_start_equity,
+                    drawdown5
+                )
+                VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?)
+                """,
+                (
+                    iso(ts),
+                    iso_ist(ts),
+                    str(trading_date),
+                    float(cash),
+                    float(equity),
+                    float(gross),
+                    float(daily_start_equity),
+                    float(drawdown5),
+                ),
+            )
+
+            # Only the first successful EOD insertion can advance the
+            # completed-day state. Repeated processing is therefore
+            # idempotent and cannot overwrite the authoritative mark.
+            if cursor.rowcount == 1:
+                self.db.set_state(
+                    "last_eod_trading_date",
+                    str(trading_date),
+                )
+                self.db.set_state(
+                    "last_eod_equity",
+                    float(equity),
+                )
+                self.db.set_state(
+                    "last_eod_ts_utc",
+                    iso(ts),
+                )
+
+                return True
+
+            return False
+
+    def eod_marks(self, limit=5):
+        rows = self.db.conn.execute(
+            """
+            SELECT trading_date, ts_utc, ts_ist, equity, daily_start_equity, drawdown5
+            FROM account_snapshots
+            WHERE is_eod=1 AND trading_date <> ''
+            ORDER BY trading_date DESC
+            LIMIT ?
+            """,
+            (int(limit),),
+        ).fetchall()
+
+        return [dict(row) for row in rows]

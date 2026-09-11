@@ -88,7 +88,64 @@ class TradingAgent:
                 f=self.broker.sell(symbol,q,now,p.strategy_version,ExitReason.STOP); self.repo.cooldown(symbol,now+timedelta(minutes=self.cfg["risk"]["stop_cooldown_minutes"]),"stop_loss"); self._notify("paper_exit",symbol=symbol,reason="STOP",price=str(f.price),qty=f.qty,net_pnl=None); continue
             if bid>=p.target_price:
                 f=self.broker.sell(symbol,q,now,p.strategy_version,ExitReason.TARGET); self._notify("paper_exit",symbol=symbol,reason="TARGET",price=str(f.price),qty=f.qty,net_pnl=None)
-        quotes=self.provider.latest_quotes(symbols); equity=self.risk.equity(quotes); self.repo.db.set_state("last_equity",equity)
+        quotes=self.provider.latest_quotes(symbols)
+        equity=self.risk.equity(quotes)
+        self.repo.db.set_state("last_equity",equity)
+
+        # Once the continuous session has closed, persist exactly one
+        # completed EOD equity mark for the NSE trading date.
+        if session.state.value == "EOD" and session.is_trading_day:
+            eod_date = session.trading_date.isoformat()
+            last_eod = self.repo.db.get_state("last_eod_trading_date")
+
+            if last_eod != eod_date:
+                daily_start = self.repo.db.get_state(
+                    "daily_start_equity",
+                    self.cfg["account"]["starting_capital"],
+                )
+
+                gross = equity - self.repo.cash()
+
+                # Calculate the drawdown represented by this completed
+                # mark against the previous completed EOD peak.
+                previous_marks = self.repo.eod_marks(
+                    self.cfg["risk"]["rolling_drawdown_days"] - 1
+                )
+
+                values = [
+                    float(mark["equity"])
+                    for mark in reversed(previous_marks)
+                ]
+
+                peak = max(values + [equity]) if values else equity
+                drawdown = (
+                    (peak - equity) / peak
+                    if peak > 0
+                    else 0.0
+                )
+
+                self.repo.record_eod_snapshot(
+                    eod_date,
+                    now,
+                    self.repo.cash(),
+                    equity,
+                    gross,
+                    daily_start,
+                    drawdown,
+                )
+
+                event(
+                    self.log,
+                    logging.INFO,
+                    "eod_equity_mark",
+                    trading_date=eod_date,
+                    equity=equity,
+                    cash=self.repo.cash(),
+                    gross=gross,
+                    daily_start_equity=daily_start,
+                    drawdown5=drawdown,
+                )
+
         if not healthy or not session.entries_allowed:
             return
         regime=self.regime_engine.classify(now,100.0,99.0,98.0,0.60,0.50,False,healthy); self.repo.record_regime(regime)
