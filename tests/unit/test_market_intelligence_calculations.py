@@ -10,16 +10,7 @@ from nse_paper_agent.regime.intelligence import MarketIntelligence
 def make_bars(symbol, closes):
     start = datetime(2026, 1, 1, tzinfo=timezone.utc)
     return [
-        Bar(
-            symbol,
-            start + timedelta(days=i),
-            start + timedelta(days=i + 1),
-            Decimal(str(close)),
-            Decimal(str(close)),
-            Decimal(str(close)),
-            Decimal(str(close)),
-            Decimal("100000"),
-        )
+        Bar(symbol, start + timedelta(days=i), start + timedelta(days=i + 1), Decimal(str(close)), Decimal(str(close)), Decimal(str(close)), Decimal(str(close)), Decimal("100000"))
         for i, close in enumerate(closes)
     ]
 
@@ -42,10 +33,7 @@ def test_benchmark_requires_sufficient_history():
 
 def test_breadth_requires_minimum_eligible_universe():
     intelligence = MarketIntelligence(breadth_min_symbols=5)
-    bars = {
-        f"S{i}": make_bars(f"S{i}", list(range(1, 21 + (i % 2))))
-        for i in range(4)
-    }
+    bars = {f"S{i}": make_bars(f"S{i}", list(range(1, 21 + (i % 2)))) for i in range(4)}
     assert intelligence.breadth(bars) is None
 
 
@@ -53,10 +41,7 @@ def test_breadth_counts_symbols_above_their_sma20():
     intelligence = MarketIntelligence(breadth_min_symbols=5)
     bars = {}
     for i in range(5):
-        if i < 3:
-            closes = [100] * 19 + [110]
-        else:
-            closes = [100] * 19 + [90]
+        closes = [100] * 19 + [110 if i < 3 else 90]
         bars[f"S{i}"] = make_bars(f"S{i}", closes)
     assert intelligence.breadth(bars) == pytest.approx(3 / 5)
 
@@ -68,6 +53,14 @@ def test_volatility_percentile_is_bounded():
     result = MarketIntelligence(volatility_history=10).benchmark(make_bars("NIFTY50", closes))
     assert 0.0 <= result["vol_percentile"] <= 1.0
     assert result["vol_shock"] in (True, False)
+
+
+def test_volatility_percentile_ties_are_not_extreme():
+    closes = [100.0]
+    for _ in range(99):
+        closes.append(closes[-1] * 1.001)
+    result = MarketIntelligence(volatility_history=10).benchmark(make_bars("NIFTY50", closes))
+    assert result["vol_percentile"] == pytest.approx(0.5)
 
 
 def test_invalid_price_history_degrades_volatility_inputs():
