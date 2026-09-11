@@ -12,8 +12,9 @@ def test_sentiment_quality_changes_strategy_entry_without_touching_risk():
     strategy = BaselineBreakoutStrategy()
     now = datetime(2026, 9, 11, 9, 0, tzinfo=timezone.utc)
 
-    # First 14 changes net to zero (10 x +0.20, 4 x -0.50), then +1.00.
-    # This produces a real SMA cross while keeping RSI inside 50-70.
+    # First 14 changes net to zero (10 x +0.20, 4 x -0.50), then six
+    # unchanged bars, then +1.00. This gives the strategy the required
+    # 21 completed bars while preserving a real SMA cross and RSI in 50-70.
     closes = [Decimal("100")]
     for change in [
         Decimal("0.20"), Decimal("0.20"), Decimal("0.20"), Decimal("0.20"),
@@ -22,6 +23,7 @@ def test_sentiment_quality_changes_strategy_entry_without_touching_risk():
         Decimal("-0.50"), Decimal("-0.50"),
     ]:
         closes.append(closes[-1] + change)
+    closes.extend([Decimal("100")] * 6)
     assert closes[-1] == Decimal("100")
     closes.append(Decimal("101"))
 
