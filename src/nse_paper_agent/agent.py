@@ -6,6 +6,7 @@ from datetime import timedelta
 from nse_paper_agent.domain.models import ExitReason
 from nse_paper_agent.monitoring.logging import event
 from nse_paper_agent.regime.intelligence import MarketIntelligence
+from nse_paper_agent.sentiment.policy import SentimentPolicy
 
 
 class TradingAgent:
@@ -18,6 +19,12 @@ class TradingAgent:
             volatility_history=int(market_cfg.get("regime",{}).get("volatility_history",60)),
             breadth_window=int(market_cfg.get("regime",{}).get("breadth_window",20)),
             breadth_min_symbols=int(market_cfg.get("minimum_breadth_symbols",5)),
+        )
+        sentiment_cfg=cfg.get("sentiment",{})
+        self.sentiment_policy=SentimentPolicy(
+            min_score=float(sentiment_cfg.get("min_score",0.10)),
+            normal_score=float(sentiment_cfg.get("normal_score",0.40)),
+            stale_after_minutes=int(sentiment_cfg.get("stale_after_minutes",30)),
         )
     def startup(self):
         self.provider.connect(); now=self.clock(); daily_start=self.session.ensure_daily_state(self.repo,now,self.cfg["account"]["starting_capital"])
@@ -86,11 +93,18 @@ class TradingAgent:
             if not qok: continue
             bars=market_bars.get(symbol) or self.provider.completed_bars(symbol,self.cfg["market"]["bar_interval_minutes"],now)
             for b in bars[-1:]: self.repo.record_bar(b)
-            signal=self.strategy.evaluate(bars,ist,regime.regime,symbol_sentiments[symbol].score,symbol in self.repo.positions(),self.repo.in_cooldown(symbol,now),True,qok); self.repo.record_signal(signal,f"{signal.strategy_version}:{symbol}:{signal.bar_end.isoformat()}")
+            allowed,sentiment_factor,sentiment_reason,sentiment_score=self.sentiment_policy.entry(symbol_sentiments[symbol],now)
+            if not allowed:
+                signal=self.strategy.evaluate(bars,ist,regime.regime,sentiment_score,symbol in self.repo.positions(),self.repo.in_cooldown(symbol,now),True,qok)
+                self.repo.record_signal(signal,f"{signal.strategy_version}:{symbol}:{signal.bar_end.isoformat()}")
+                self.repo.record_risk(now,"SENTIMENT_GATE",False,sentiment_reason,{"symbol":symbol,"sentiment_score":sentiment_score})
+                continue
+            signal=self.strategy.evaluate(bars,ist,regime.regime,sentiment_score,symbol in self.repo.positions(),self.repo.in_cooldown(symbol,now),True,qok); self.repo.record_signal(signal,f"{signal.strategy_version}:{symbol}:{signal.bar_end.isoformat()}")
             if not signal.eligible: continue
             price=q.ask or q.last
             if price is None: continue
-            qty=self.risk.quantity(price,equity,q,rd.size_factor)
+            qty=self.risk.quantity(price,equity,q,rd.size_factor*sentiment_factor)
+            self.repo.record_risk(now,"SENTIMENT_GATE",True,sentiment_reason,{"symbol":symbol,"sentiment_score":sentiment_score,"size_factor":sentiment_factor})
             if qty<=0: continue
             try:
                 f=self.broker.buy(symbol,qty,q,now,signal.strategy_version); p=self.repo.positions()[symbol]; self._notify("paper_entry",symbol=symbol,price=str(f.price),qty=qty,stop=str(p.stop_price),target=str(p.target_price))
