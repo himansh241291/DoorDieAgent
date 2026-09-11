@@ -2,7 +2,6 @@ import pytest
 
 from nse_paper_agent.research.governance import PromotionGate, build_manifest
 from nse_paper_agent.research.identity import identity_from_manifest, require_production_decision, verify_identity
-from nse_paper_agent.research.lifecycle import StrategyState
 from nse_paper_agent.research.promotion import evaluate_promotion
 
 
@@ -11,10 +10,11 @@ def manifest(version="candidate-v2", sma=20):
 
 
 def test_production_identity_is_derived_from_manifest():
-    identity = identity_from_manifest(manifest("baseline-v1"))
+    source = manifest("baseline-v1")
+    identity = identity_from_manifest(source)
     assert identity.version == "baseline-v1"
-    assert identity.config_hash == manifest("baseline-v1").config_hash
-    assert identity.risk_hash == manifest("baseline-v1").risk_hash
+    assert identity.config_hash == source.config_hash
+    assert identity.risk_hash == source.risk_hash
 
 
 def test_identity_verification_fails_on_config_change():
