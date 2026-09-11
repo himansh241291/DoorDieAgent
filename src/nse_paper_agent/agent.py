@@ -77,23 +77,77 @@ class TradingAgent:
         healthy,reason=self.provider.healthy(now)
         self.repo.record_data_health(now,healthy,reason,{})
         quotes=self.provider.latest_quotes(symbols)
+
+        # Existing positions remain manageable even when the feed is
+        # stale or otherwise unhealthy. Entry quality requirements must
+        # never turn into an exit-management failure.
         for symbol,p in list(self.repo.positions().items()):
             q=quotes.get(symbol)
-            if not q: continue
-            ok,_=self.health.check_quote(q,now)
-            if not ok: continue
-            bid=q.bid or q.last
-            if bid is None: continue
+            if not q:
+                continue
+
+            exit_ok,exit_reason=self.health.check_exit_price(q)
+            if not exit_ok:
+                self.repo.record_risk(
+                    now,
+                    "EXIT_PRICE_UNAVAILABLE",
+                    False,
+                    exit_reason,
+                    {"symbol":symbol},
+                )
+                continue
+
+            bid=q.bid if q.bid is not None else q.last
+
             if bid<=p.stop_price:
-                f=self.broker.sell(symbol,q,now,p.strategy_version,ExitReason.STOP); self.repo.cooldown(symbol,now+timedelta(minutes=self.cfg["risk"]["stop_cooldown_minutes"]),"stop_loss"); self._notify("paper_exit",symbol=symbol,reason="STOP",price=str(f.price),qty=f.qty,net_pnl=None); continue
+                f=self.broker.sell(
+                    symbol,q,now,p.strategy_version,ExitReason.STOP
+                )
+                self.repo.cooldown(
+                    symbol,
+                    now+timedelta(
+                        minutes=self.cfg["risk"]["stop_cooldown_minutes"]
+                    ),
+                    "stop_loss",
+                )
+                self._notify(
+                    "paper_exit",
+                    symbol=symbol,
+                    reason="STOP",
+                    price=str(f.price),
+                    qty=f.qty,
+                    net_pnl=None,
+                )
+                continue
+
             if bid>=p.target_price:
-                f=self.broker.sell(symbol,q,now,p.strategy_version,ExitReason.TARGET); self._notify("paper_exit",symbol=symbol,reason="TARGET",price=str(f.price),qty=f.qty,net_pnl=None); continue
+                f=self.broker.sell(
+                    symbol,q,now,p.strategy_version,ExitReason.TARGET
+                )
+                self._notify(
+                    "paper_exit",
+                    symbol=symbol,
+                    reason="TARGET",
+                    price=str(f.price),
+                    qty=f.qty,
+                    net_pnl=None,
+                )
+                continue
 
             # v1 is strictly intraday. Anything still open after the
             # continuous session must be closed conservatively.
             if session.state.value == "EOD":
-                f=self.broker.sell(symbol,q,now,p.strategy_version,ExitReason.FORCED)
-                self._notify("paper_exit",symbol=symbol,reason="EOD_FORCED",price=str(f.price),qty=f.qty,net_pnl=None)
+                f=self.broker.sell(
+                    symbol,q,now,p.strategy_version,ExitReason.FORCED
+                )
+                self._notify(
+                    "paper_exit",
+                    symbol=symbol,
+                    reason="EOD_FORCED",
+                    price=str(f.price),
+                    qty=f.qty,
+                    net_pnl=None,
+                )
 
         quotes=self.provider.latest_quotes(symbols)
         equity=self.risk.equity(quotes)
