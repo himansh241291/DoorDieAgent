@@ -124,6 +124,13 @@ def main():
                     position.strategy_version,
                     ExitReason.STOP,
                 )
+                repo.cooldown(
+                    bar.symbol,
+                    now + timedelta(
+                        minutes=cfg["risk"]["stop_cooldown_minutes"]
+                    ),
+                    "stop_loss",
+                )
             elif quote.bid >= position.target_price:
                 broker.sell(
                     bar.symbol,
@@ -135,6 +142,7 @@ def main():
 
         if len(history[bar.symbol]) >= 35:
             position_exists = bar.symbol in repo.positions()
+            cooldown = repo.in_cooldown(bar.symbol, now)
 
             signal = strategy.evaluate(
                 history[bar.symbol],
@@ -142,7 +150,7 @@ def main():
                 Regime.RISK_ON,
                 0.5,
                 position_exists,
-                False,
+                cooldown,
                 True,
                 True,
             )
