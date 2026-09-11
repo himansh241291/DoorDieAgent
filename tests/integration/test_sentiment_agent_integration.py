@@ -12,20 +12,21 @@ def test_sentiment_quality_changes_strategy_entry_without_touching_risk():
     strategy = BaselineBreakoutStrategy()
     now = datetime(2026, 9, 11, 9, 0, tzinfo=timezone.utc)
 
-    # First 14 changes net to zero (10 x +0.20, 4 x -0.50), then six
-    # unchanged bars, then +1.00. This gives the strategy the required
-    # 21 completed bars while preserving a real SMA cross and RSI in 50-70.
+    # Twenty bars before the breakout. The final 14 changes contain +1.00,
+    # -1.00 and the final +0.50 breakout, producing RSI = 60.0 while the
+    # previous close remains at/below the 20-SMA.
     closes = [Decimal("100")]
     for change in [
-        Decimal("0.20"), Decimal("0.20"), Decimal("0.20"), Decimal("0.20"),
-        Decimal("0.20"), Decimal("0.20"), Decimal("0.20"), Decimal("0.20"),
-        Decimal("0.20"), Decimal("0.20"), Decimal("-0.50"), Decimal("-0.50"),
-        Decimal("-0.50"), Decimal("-0.50"),
+        Decimal("0"), Decimal("0"), Decimal("0"), Decimal("0"),
+        Decimal("0"), Decimal("0"), Decimal("0"), Decimal("1"),
+        Decimal("-1"), Decimal("0"), Decimal("0"), Decimal("0"),
+        Decimal("0"), Decimal("0"), Decimal("0"), Decimal("0"),
+        Decimal("0"), Decimal("0"), Decimal("0"),
     ]:
         closes.append(closes[-1] + change)
-    closes.extend([Decimal("100")] * 6)
+    assert len(closes) == 20
     assert closes[-1] == Decimal("100")
-    closes.append(Decimal("101"))
+    closes.append(Decimal("100.50"))
 
     bars = [
         Bar("ABC", now, now, close, close, close, close, Decimal("100000"))
