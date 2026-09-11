@@ -15,6 +15,8 @@ from nse_paper_agent.monitoring.alerts import NullNotifier, WebhookNotifier
 from nse_paper_agent.monitoring.logging import configure_logging
 from nse_paper_agent.utils.locking import SingleProcessLock
 from nse_paper_agent.utils.time import utcnow
+from nse_paper_agent.research.governance import build_manifest
+from nse_paper_agent.research.production import verify_persisted
 
 def build(cfg_path):
     cfg=load_yaml(cfg_path); validate_runtime_config(cfg)
@@ -22,6 +24,16 @@ def build(cfg_path):
     if expected and expected!=actual: raise ValueError("immutable risk configuration hash mismatch")
     configure_logging(cfg["logging"]["directory"],cfg["logging"]["level"],cfg["logging"]["max_bytes"],cfg["logging"]["backup_count"])
     db=Database(cfg["persistence"]["database"]); db.initialize(); repo=Repository(db)
+    strategy_path=cfg["strategy"]["production"]
+    strategy_cfg=load_yaml(strategy_path)
+    manifest=build_manifest(
+        strategy_cfg["version"],
+        strategy_cfg,
+        cfg["risk"],
+        str(strategy_cfg.get("effective_date", "")),
+        {"source": strategy_path},
+    )
+    verify_persisted(repo, manifest)
     provider=LiveMarketDataAdapterPlaceholder("configured-live-market-data-placeholder")
     broker=PaperBroker(cfg,repo); risk=RiskEngine(cfg,repo); health=DataHealth(30,cfg["risk"]["max_spread_bps"])
     strategy=BaselineBreakoutStrategy(); regime=RegimeEngine(); sentiment=NeutralSentimentProvider(); session=SessionGuard(cfg)
