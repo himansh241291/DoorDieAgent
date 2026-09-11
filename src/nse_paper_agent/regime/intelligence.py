@@ -89,7 +89,9 @@ class MarketIntelligence:
         if len(realized) >= self.volatility_history:
             current = realized[-1]
             history = realized[-self.volatility_history:]
-            percentile = sum(v <= current for v in history) / len(history)
+            less = sum(v < current for v in history)
+            equal = sum(v == current for v in history)
+            percentile = (less + 0.5 * equal) / len(history)
 
         vol_shock = None
         if len(realized) >= 2:
