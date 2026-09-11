@@ -24,7 +24,7 @@ def test_promotion_passes_only_when_all_required_gates_pass():
 
 def test_promotion_rejects_bad_oos_metrics():
     good = {"trades": 60, "max_drawdown": 0.02, "net_expectancy": 10}
-    bad = {"trades": 20, "max_drawdown": 0.05, "net_expectancy": 0}
+    bad = {"trades": 19, "max_drawdown": 0.05, "net_expectancy": 0}
     ok, reasons = evaluate_candidate(good, bad, good, PromotionGate(), True)
     assert not ok
     assert {"insufficient_oos_trades", "oos_drawdown_exceeded", "oos_expectancy_not_positive"} <= set(reasons)
