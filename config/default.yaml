@@ -34,7 +34,12 @@ market:
   minimum_price: 20.0
   minimum_turnover: 1000000.0
   minimum_relative_volume: 0.8
+  minimum_breadth_symbols: 5
   regime:
+    benchmark_min_bars: 50
+    volatility_window: 20
+    volatility_history: 60
+    breadth_window: 20
     cautious_size_factor: 0.5
     range_bound_shadow_only: true
 sentiment:
