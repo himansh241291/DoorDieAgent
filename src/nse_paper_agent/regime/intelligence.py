@@ -9,13 +9,13 @@ from nse_paper_agent.domain.models import Bar
 
 @dataclass(frozen=True)
 class MarketIntelligence:
-    """Calculate the small, deterministic feature set used by RegimeEngine."""
+    """Calculate the deterministic feature set consumed by RegimeEngine."""
 
     benchmark_min_bars: int = 50
-    breadth_min_bars: int = 20
     volatility_window: int = 20
     volatility_history: int = 60
     breadth_window: int = 20
+    breadth_min_symbols: int = 5
 
     @staticmethod
     def _closes(bars: list[Bar]) -> list[float]:
@@ -37,8 +37,7 @@ class MarketIntelligence:
         return out
 
     def benchmark(self, bars: list[Bar]) -> dict[str, float | bool | None]:
-        ordered = sorted(bars, key=lambda bar: bar.end)
-        closes = self._closes(ordered)
+        closes = self._closes(sorted(bars, key=lambda bar: bar.end))
         if len(closes) < self.benchmark_min_bars:
             return {"close": closes[-1] if closes else None, "sma20": None, "sma50": None,
                     "vol_percentile": None, "vol_shock": None}
@@ -53,11 +52,11 @@ class MarketIntelligence:
         realized: list[float] = []
         for end in range(self.volatility_window, len(returns) + 1):
             window = returns[end - self.volatility_window:end]
-            realized.append(math.sqrt(mean((value - mean(window)) ** 2 for value in window)) * math.sqrt(252.0))
+            avg = mean(window)
+            realized.append(math.sqrt(mean((value - avg) ** 2 for value in window)) * math.sqrt(252.0))
 
-        if len(realized) < self.volatility_history:
-            percentile = None
-        else:
+        percentile = None
+        if len(realized) >= self.volatility_history:
             current = realized[-1]
             history = realized[-self.volatility_history:]
             percentile = sum(value <= current for value in history) / len(history)
@@ -80,7 +79,8 @@ class MarketIntelligence:
                 continue
             eligible += 1
             above += closes[-1] > sma20
-        if eligible == 0:
+
+        if eligible < self.breadth_min_symbols:
             return None
         return above / eligible
 
