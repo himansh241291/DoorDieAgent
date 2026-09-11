@@ -20,4 +20,5 @@ class BaselineBreakoutStrategy:
         if not (closes[-1]>cur and closes[-2]<=prev): return Signal(b.symbol,b.end,self.version,False,"no_sma_cross")
         if not (50<cur_rsi<70): return Signal(b.symbol,b.end,self.version,False,"rsi_filter",cur_rsi)
         if sentiment_score is not None and sentiment_score<0.10: return Signal(b.symbol,b.end,self.version,False,"sentiment_filter",sentiment_score)
-        return Signal(b.symbol,b.end,self.version,True,"baseline_entry",cur_rsi,{"sma":float(cur),"rsi":cur_rsi})
+        size_factor=0.5 if sentiment_score is not None and sentiment_score<0.40 else 1.0
+        return Signal(b.symbol,b.end,self.version,True,"baseline_entry",cur_rsi,{"sma":float(cur),"rsi":cur_rsi,"sentiment_score":sentiment_score,"sentiment_size_factor":size_factor})
