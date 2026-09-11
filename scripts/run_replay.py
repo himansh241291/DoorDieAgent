@@ -50,21 +50,17 @@ def snapshot(repo, risk, quotes, now):
     equity = risk.equity(quotes)
     gross = equity - repo.cash()
 
-    repo.db.conn.execute(
-        """
-        INSERT INTO account_snapshots
-        (ts_utc, ts_ist, cash, equity, gross, daily_start_equity, drawdown5)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            now.astimezone().isoformat(),
-            now.astimezone().isoformat(),
-            repo.cash(),
-            equity,
-            gross,
-            repo.db.get_state("daily_start_equity", 50000.0),
-            0.0,
+    repo.record_account_snapshot_and_checkpoint(
+        symbol=next(iter(quotes)),
+        bar_end=now,
+        cash=repo.cash(),
+        equity=equity,
+        gross=gross,
+        daily_start_equity=repo.db.get_state(
+            "daily_start_equity",
+            50000.0,
         ),
+        drawdown5=0.0,
     )
 
 
@@ -99,10 +95,22 @@ def main():
     risk = RiskEngine(cfg, repo)
     strategy = BaselineBreakoutStrategy()
 
-    history = {symbol: [] for symbol in symbols}
+    # Restore strategy history from durable storage before processing
+    # any new bars. This is required for correct indicator state after
+    # a process restart.
+    history = {
+        symbol: repo.market_bars(symbol)
+        for symbol in symbols
+    }
 
     for bar in sorted(bars, key=lambda item: item.end):
         now = bar.end
+
+        # A completed bar must never be processed twice after restart.
+        checkpoint = repo.get_checkpoint(bar.symbol)
+        if checkpoint is not None and now.isoformat() <= checkpoint:
+            continue
+
         history[bar.symbol].append(bar)
 
         # Persist every completed market bar.
