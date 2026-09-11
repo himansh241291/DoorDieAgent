@@ -62,8 +62,6 @@ class TradingAgent:
             exits_allowed=session.exits_allowed,
         )
 
-        # No trading activity on weekends/holidays or outside the
-        # continuous equity market session.
         if not session.exits_allowed:
             event(
                 self.log,
@@ -78,9 +76,6 @@ class TradingAgent:
         self.repo.record_data_health(now,healthy,reason,{})
         quotes=self.provider.latest_quotes(symbols)
 
-        # Existing positions remain manageable even when the feed is
-        # stale or otherwise unhealthy. Entry quality requirements must
-        # never turn into an exit-management failure.
         for symbol,p in list(self.repo.positions().items()):
             q=quotes.get(symbol)
             if not q:
@@ -134,8 +129,6 @@ class TradingAgent:
                 )
                 continue
 
-            # v1 is strictly intraday. Anything still open after the
-            # continuous session must be closed conservatively.
             if session.state.value == "EOD":
                 f=self.broker.sell(
                     symbol,q,now,p.strategy_version,ExitReason.FORCED
@@ -153,8 +146,6 @@ class TradingAgent:
         equity=self.risk.equity(quotes)
         self.repo.db.set_state("last_equity",equity)
 
-        # Once the continuous session has closed, persist exactly one
-        # completed EOD equity mark for the NSE trading date.
         if session.state.value == "EOD" and session.is_trading_day:
             eod_date = session.trading_date.isoformat()
             last_eod = self.repo.db.get_state("last_eod_trading_date")
@@ -166,18 +157,13 @@ class TradingAgent:
                 )
 
                 gross = equity - self.repo.cash()
-
-                # Calculate the drawdown represented by this completed
-                # mark against the previous completed EOD peak.
                 previous_marks = self.repo.eod_marks(
                     self.cfg["risk"]["rolling_drawdown_days"] - 1
                 )
-
                 values = [
                     float(mark["equity"])
                     for mark in reversed(previous_marks)
                 ]
-
                 peak = max(values + [equity]) if values else equity
                 drawdown = (
                     (peak - equity) / peak
@@ -207,27 +193,69 @@ class TradingAgent:
                     drawdown5=drawdown,
                 )
 
+        market_sentiment=self.sentiment.market(now)
+        self.repo.record_sentiment(market_sentiment)
+        symbol_sentiments={}
+        for symbol in symbols:
+            observation=self.sentiment.symbol(symbol,now)
+            symbol_sentiments[symbol]=observation
+            self.repo.record_sentiment(observation)
+
+        # No fabricated regime inputs: until the provider supplies the
+        # benchmark/breadth/volatility measurements, the regime is degraded
+        # and the risk engine blocks new entries.
+        regime=self.regime_engine.classify(
+            now,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            healthy,
+        )
+        self.repo.record_regime(regime)
+
         if not healthy or not session.entries_allowed:
             return
-        regime=self.regime_engine.classify(now,100.0,99.0,98.0,0.60,0.50,False,healthy); self.repo.record_regime(regime)
-        rd=self.risk.can_buy(now,quotes,equity,regime.regime); self.repo.record_risk(now,"ENTRY_GATE",rd.allowed,rd.reason,{"size_factor":rd.size_factor})
-        if not rd.allowed: return
+
+        rd=self.risk.can_buy(now,quotes,equity,regime.regime)
+        self.repo.record_risk(now,"ENTRY_GATE",rd.allowed,rd.reason,{"size_factor":rd.size_factor})
+        if not rd.allowed:
+            return
+
         for symbol in symbols:
             q=quotes.get(symbol)
-            if not q: continue
+            if not q:
+                continue
             qok,_=self.health.check_quote(q,now)
-            if not qok: continue
+            if not qok:
+                continue
             bars=self.provider.completed_bars(symbol,self.cfg["market"]["bar_interval_minutes"],now)
-            for b in bars[-1:]: self.repo.record_bar(b)
-            s_obs=self.sentiment.symbol(symbol,now); self.repo.record_sentiment(s_obs)
-            signal=self.strategy.evaluate(bars,ist,regime.regime,s_obs.score,symbol in self.repo.positions(),self.repo.in_cooldown(symbol,now),True,qok)
+            for b in bars[-1:]:
+                self.repo.record_bar(b)
+            s_obs=symbol_sentiments[symbol]
+            signal=self.strategy.evaluate(
+                bars,
+                ist,
+                regime.regime,
+                s_obs.score,
+                symbol in self.repo.positions(),
+                self.repo.in_cooldown(symbol,now),
+                True,
+                qok,
+            )
             self.repo.record_signal(signal,f"{signal.strategy_version}:{symbol}:{signal.bar_end.isoformat()}")
-            if not signal.eligible: continue
+            if not signal.eligible:
+                continue
             price=q.ask or q.last
-            if price is None: continue
+            if price is None:
+                continue
             qty=self.risk.quantity(price,equity,q,rd.size_factor)
-            if qty<=0: continue
+            if qty<=0:
+                continue
             try:
                 f=self.broker.buy(symbol,qty,q,now,signal.strategy_version)
                 self._notify("paper_entry",symbol=symbol,price=str(f.price),qty=qty,stop=str(self.repo.positions()[symbol].stop_price),target=str(self.repo.positions()[symbol].target_price))
-            except Exception as exc: self.repo.record_risk(now,"ENTRY_ERROR",False,str(exc),{"symbol":symbol})
+            except Exception as exc:
+                self.repo.record_risk(now,"ENTRY_ERROR",False,str(exc),{"symbol":symbol})
