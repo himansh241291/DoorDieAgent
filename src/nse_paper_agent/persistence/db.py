@@ -6,7 +6,7 @@ from datetime import datetime,timezone
 from zoneinfo import ZoneInfo
 
 IST=ZoneInfo("Asia/Kolkata")
-SCHEMA_VERSION=2
+SCHEMA_VERSION=3
 SCHEMA='''
 CREATE TABLE IF NOT EXISTS schema_meta(version INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS account_snapshots(id INTEGER PRIMARY KEY,ts_utc TEXT NOT NULL,ts_ist TEXT NOT NULL,trading_date TEXT NOT NULL DEFAULT '',is_eod INTEGER NOT NULL DEFAULT 0,cash REAL NOT NULL,equity REAL NOT NULL,gross REAL NOT NULL,daily_start_equity REAL NOT NULL,drawdown5 REAL NOT NULL);
@@ -25,9 +25,11 @@ CREATE TABLE IF NOT EXISTS system_events(id INTEGER PRIMARY KEY AUTOINCREMENT,ts
 CREATE TABLE IF NOT EXISTS data_health_events(id INTEGER PRIMARY KEY AUTOINCREMENT,ts_utc TEXT NOT NULL,healthy INTEGER NOT NULL,reason TEXT NOT NULL,details_json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS cooldowns(symbol TEXT PRIMARY KEY,until_utc TEXT NOT NULL,reason TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS kv_state(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS strategy_promotion_audit(id INTEGER PRIMARY KEY AUTOINCREMENT,strategy_version TEXT NOT NULL,state TEXT NOT NULL,approved INTEGER NOT NULL,decided_at_utc TEXT NOT NULL,reasons_json TEXT NOT NULL,manifest_json TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_snapshots_ts ON account_snapshots(ts_utc);
 CREATE INDEX IF NOT EXISTS idx_fills_ts ON simulated_fills(ts_utc);
 CREATE INDEX IF NOT EXISTS idx_closed_exit ON closed_trades(exit_ts_utc);
+CREATE INDEX IF NOT EXISTS idx_promotion_audit_ts ON strategy_promotion_audit(decided_at_utc);
 '''
 class Database:
     def __init__(self,path:str):
@@ -36,85 +38,28 @@ class Database:
     def initialize(self):
         with self.conn:
             self.conn.executescript(SCHEMA)
-
-            version_row = self.conn.execute(
-                "SELECT version FROM schema_meta ORDER BY version DESC LIMIT 1"
-            ).fetchone()
-
+            version_row = self.conn.execute("SELECT version FROM schema_meta ORDER BY version DESC LIMIT 1").fetchone()
             if version_row is None:
-                self.conn.execute(
-                    "INSERT INTO schema_meta(version) VALUES(?)",
-                    (SCHEMA_VERSION,),
-                )
+                self.conn.execute("INSERT INTO schema_meta(version) VALUES(?)", (SCHEMA_VERSION,))
             else:
                 current = int(version_row["version"])
-
                 if current < 2:
-                    columns = {
-                        row["name"]
-                        for row in self.conn.execute(
-                            "PRAGMA table_info(account_snapshots)"
-                        ).fetchall()
-                    }
-
-                    if "trading_date" not in columns:
-                        self.conn.execute(
-                            "ALTER TABLE account_snapshots "
-                            "ADD COLUMN trading_date TEXT NOT NULL DEFAULT ''"
-                        )
-
-                    if "is_eod" not in columns:
-                        self.conn.execute(
-                            "ALTER TABLE account_snapshots "
-                            "ADD COLUMN is_eod INTEGER NOT NULL DEFAULT 0"
-                        )
-
-                    # Backfill the NSE trading date and normalize the IST
-                    # representation of legacy UTC timestamps. Existing
-                    # historical rows remain is_eod=0 deliberately: we must
-                    # never fabricate completed EOD marks from old data.
-                    rows = self.conn.execute(
-                        "SELECT id, ts_utc FROM account_snapshots"
-                    ).fetchall()
-
+                    columns = {row["name"] for row in self.conn.execute("PRAGMA table_info(account_snapshots)").fetchall()}
+                    if "trading_date" not in columns: self.conn.execute("ALTER TABLE account_snapshots ADD COLUMN trading_date TEXT NOT NULL DEFAULT ''")
+                    if "is_eod" not in columns: self.conn.execute("ALTER TABLE account_snapshots ADD COLUMN is_eod INTEGER NOT NULL DEFAULT 0")
+                    rows = self.conn.execute("SELECT id, ts_utc FROM account_snapshots").fetchall()
                     for row in rows:
-                        raw = row["ts_utc"]
-                        dt = datetime.fromisoformat(raw)
-
-                        if dt.tzinfo is None:
-                            dt = dt.replace(tzinfo=timezone.utc)
-
+                        dt = datetime.fromisoformat(row["ts_utc"])
+                        if dt.tzinfo is None: dt = dt.replace(tzinfo=timezone.utc)
                         ist = dt.astimezone(IST)
-
-                        self.conn.execute(
-                            """
-                            UPDATE account_snapshots
-                            SET trading_date=?, ts_ist=?
-                            WHERE id=?
-                            """,
-                            (
-                                ist.date().isoformat(),
-                                ist.isoformat(),
-                                row["id"],
-                            ),
-                        )
-
-                    self.conn.execute(
-                        "UPDATE schema_meta SET version=?",
-                        (SCHEMA_VERSION,),
-                    )
-
-            # This constraint must exist for BOTH newly-created databases
-            # and databases migrated from schema version 1.
-            #
-            # Without it, INSERT OR IGNORE cannot guarantee that only one
-            # completed EOD mark exists for an NSE trading date.
-            self.conn.execute(
-                "CREATE UNIQUE INDEX IF NOT EXISTS "
-                "idx_account_snapshots_eod_date "
-                "ON account_snapshots(trading_date) "
-                "WHERE is_eod=1 AND trading_date <> ''"
-            )
+                        self.conn.execute("UPDATE account_snapshots SET trading_date=?, ts_ist=? WHERE id=?", (ist.date().isoformat(), ist.isoformat(), row["id"]))
+                    self.conn.execute("UPDATE schema_meta SET version=?", (2,))
+                    current = 2
+                if current < 3:
+                    self.conn.execute("CREATE TABLE IF NOT EXISTS strategy_promotion_audit(id INTEGER PRIMARY KEY AUTOINCREMENT,strategy_version TEXT NOT NULL,state TEXT NOT NULL,approved INTEGER NOT NULL,decided_at_utc TEXT NOT NULL,reasons_json TEXT NOT NULL,manifest_json TEXT NOT NULL)")
+                    self.conn.execute("CREATE INDEX IF NOT EXISTS idx_promotion_audit_ts ON strategy_promotion_audit(decided_at_utc)")
+                    self.conn.execute("UPDATE schema_meta SET version=?", (SCHEMA_VERSION,))
+            self.conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_account_snapshots_eod_date ON account_snapshots(trading_date) WHERE is_eod=1 AND trading_date <> ''")
     @contextmanager
     def transaction(self):
         if self._in_transaction: raise RuntimeError("nested database transaction is not supported")
