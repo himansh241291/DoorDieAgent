@@ -1,53 +1,57 @@
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from nse_paper_agent.domain.models import Bar, ExitReason, Position, Quote, Regime, SentimentObservation
+from nse_paper_agent.domain.models import Bar, ExitReason, Position, Quote, Regime
 from nse_paper_agent.persistence.db import Database
 from nse_paper_agent.persistence.repository import Repository
 from nse_paper_agent.paper_broker.broker import PaperBroker
 from nse_paper_agent.strategy.baseline import BaselineBreakoutStrategy
 
 
-class StaticSentiment:
-    def __init__(self, market_score, symbol_score):
-        self.market_score = market_score
-        self.symbol_score = symbol_score
-
-    def market(self, now):
-        return SentimentObservation("NIFTY50", now, self.market_score, 1.0, "test", now, {})
-
-    def symbol(self, symbol, now):
-        return SentimentObservation(symbol, now, self.symbol_score, 1.0, "test", now, {})
-
-
-def test_sentiment_quality_changes_strategy_entry_without_touching_risk(tmp_path):
+def test_sentiment_quality_changes_strategy_entry_without_touching_risk():
     strategy = BaselineBreakoutStrategy()
     now = datetime(2026, 9, 11, 9, 0, tzinfo=timezone.utc)
-    cases = [(0.80, True), (0.20, True), (0.05, False), (None, True)]
-    bars = []
-    for i in range(21):
-        close = Decimal("100") if i < 20 else Decimal("101")
-        bar_time = now.replace(minute=0) if i < 20 else now
-        bars.append(Bar("ABC", bar_time, bar_time, close, close, close, close, Decimal("100000")))
 
-    # Validate the strategy integration contract; the risk engine remains the
-    # authoritative sizing/control layer after the strategy emits a signal.
-    for sentiment, eligible in cases:
+    # First 14 changes net to zero (10 x +0.20, 4 x -0.50), then +1.00.
+    # This produces a real SMA cross while keeping RSI inside 50-70.
+    closes = [Decimal("100")]
+    for change in [
+        Decimal("0.20"), Decimal("0.20"), Decimal("0.20"), Decimal("0.20"),
+        Decimal("0.20"), Decimal("0.20"), Decimal("0.20"), Decimal("0.20"),
+        Decimal("0.20"), Decimal("0.20"), Decimal("-0.50"), Decimal("-0.50"),
+        Decimal("-0.50"), Decimal("-0.50"),
+    ]:
+        closes.append(closes[-1] + change)
+    assert closes[-1] == Decimal("100")
+    closes.append(Decimal("101"))
+
+    bars = [
+        Bar("ABC", now, now, close, close, close, close, Decimal("100000"))
+        for close in closes
+    ]
+
+    cases = [(0.80, True, 1.0), (0.20, True, 0.5), (0.05, False, None), (None, True, 1.0)]
+    for sentiment, eligible, expected_size_factor in cases:
         signal = strategy.evaluate(
             bars, now, Regime.RISK_ON, sentiment, False, False, True, True
         )
         assert signal.eligible is eligible
+        if eligible:
+            assert signal.metadata["sentiment_size_factor"] == expected_size_factor
+        else:
+            assert signal.reason == "sentiment_filter"
 
 
 def test_negative_sentiment_does_not_disable_existing_position_exit(tmp_path):
     db = Database(str(tmp_path / "sentiment.sqlite"))
     db.initialize()
     repo = Repository(db)
-    repo.set_cash(48980)
+    now = datetime.now(timezone.utc)
+    repo.set_cash(Decimal("48980"))
     repo.save_position(
         Position(
             "ABC", 10, Decimal("100"), Decimal("98.5"), Decimal("105"),
-            Decimal("20"), "baseline-breakout-v1", datetime.now(timezone.utc), Decimal("100")
+            Decimal("20"), "baseline-breakout-v1", now, Decimal("100")
         )
     )
     broker = PaperBroker(
@@ -55,8 +59,7 @@ def test_negative_sentiment_does_not_disable_existing_position_exit(tmp_path):
         repo,
     )
     quote = Quote(
-        "ABC", datetime.now(timezone.utc), Decimal("98.4"), Decimal("98.6"),
-        Decimal("98.5"), Decimal("100000")
+        "ABC", now, Decimal("98.4"), Decimal("98.6"), Decimal("98.5"), Decimal("100000")
     )
     fill = broker.sell("ABC", quote, quote.ts, "baseline-breakout-v1", ExitReason.STOP)
     assert fill.qty == 10
