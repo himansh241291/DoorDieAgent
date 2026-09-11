@@ -158,12 +158,12 @@ class SessionGuard:
                 repo.db.get_state("daily_start_equity", starting_capital)
             )
 
-        last_equity = repo.db.get_state("last_equity")
+        last_eod_equity = repo.db.get_state("last_eod_equity")
 
-        if last_equity is None:
+        if last_eod_equity is None:
             daily_start = float(starting_capital)
         else:
-            daily_start = float(last_equity)
+            daily_start = float(last_eod_equity)
 
         with repo.db.transaction():
             repo.db.set_state(

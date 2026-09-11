@@ -184,7 +184,10 @@ def test_new_trading_day_uses_last_marked_equity():
 
     s.ensure_daily_state(repo, ist(9, 15), 50000.0)
 
-    repo.db.set_state("last_equity", 51250.0)
+    # The next trading day's baseline must come from the
+    # previous completed EOD mark, not an arbitrary intraday mark.
+    repo.db.set_state("last_equity", 60000.0)
+    repo.db.set_state("last_eod_equity", 51250.0)
 
     value = s.ensure_daily_state(
         repo,

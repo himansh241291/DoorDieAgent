@@ -87,7 +87,14 @@ class TradingAgent:
             if bid<=p.stop_price:
                 f=self.broker.sell(symbol,q,now,p.strategy_version,ExitReason.STOP); self.repo.cooldown(symbol,now+timedelta(minutes=self.cfg["risk"]["stop_cooldown_minutes"]),"stop_loss"); self._notify("paper_exit",symbol=symbol,reason="STOP",price=str(f.price),qty=f.qty,net_pnl=None); continue
             if bid>=p.target_price:
-                f=self.broker.sell(symbol,q,now,p.strategy_version,ExitReason.TARGET); self._notify("paper_exit",symbol=symbol,reason="TARGET",price=str(f.price),qty=f.qty,net_pnl=None)
+                f=self.broker.sell(symbol,q,now,p.strategy_version,ExitReason.TARGET); self._notify("paper_exit",symbol=symbol,reason="TARGET",price=str(f.price),qty=f.qty,net_pnl=None); continue
+
+            # v1 is strictly intraday. Anything still open after the
+            # continuous session must be closed conservatively.
+            if session.state.value == "EOD":
+                f=self.broker.sell(symbol,q,now,p.strategy_version,ExitReason.FORCED)
+                self._notify("paper_exit",symbol=symbol,reason="EOD_FORCED",price=str(f.price),qty=f.qty,net_pnl=None)
+
         quotes=self.provider.latest_quotes(symbols)
         equity=self.risk.equity(quotes)
         self.repo.db.set_state("last_equity",equity)

@@ -4,6 +4,8 @@ from __future__ import annotations
 import argparse
 from datetime import timedelta
 from decimal import Decimal
+from pathlib import Path
+from nse_paper_agent.session import SessionGuard
 
 from nse_paper_agent.data.provider import load_bars_csv
 from nse_paper_agent.persistence.db import Database
@@ -39,6 +41,17 @@ def build_config():
         "execution": {
             "last_price_slippage_bps": 25,
         },
+        "session": {
+            "pre_open": "09:00",
+            "open": "09:15",
+            "entry_cutoff": "14:45",
+            "close": "15:30",
+            "calendar_path": str(
+                Path(__file__).resolve().parents[1]
+                / "config"
+                / "nse_holidays.yaml"
+            ),
+        },
         "safety": {
             "global_kill_switch": False,
             "emergency_kill_file": "/never",
@@ -50,9 +63,6 @@ def snapshot(repo, risk, quotes, now):
     equity = risk.equity(quotes)
     gross = equity - repo.cash()
 
-    # Replay snapshots are intraday marks, not completed EOD marks.
-    # Preserve the NSE trading date and use the symbol-specific
-    # checkpoint as before.
     symbol = next(iter(quotes))
     trading_date = now.astimezone(
         __import__("zoneinfo").ZoneInfo("Asia/Kolkata")
@@ -71,6 +81,47 @@ def snapshot(repo, risk, quotes, now):
         drawdown5=0.0,
         trading_date=trading_date,
         is_eod=False,
+    )
+
+
+def record_eod(repo, risk, now):
+    trading_date = now.astimezone(
+        __import__("zoneinfo").ZoneInfo("Asia/Kolkata")
+    ).date().isoformat()
+
+    if repo.db.get_state("last_eod_trading_date") == trading_date:
+        return False
+
+    equity = risk.equity({})
+    gross = equity - repo.cash()
+
+    previous = repo.eod_marks(
+        build_config()["risk"]["rolling_drawdown_days"] - 1
+    )
+
+    values = [
+        float(mark["equity"])
+        for mark in reversed(previous)
+    ]
+
+    peak = max(values + [equity]) if values else equity
+    drawdown = (
+        (peak - equity) / peak
+        if peak > 0
+        else 0.0
+    )
+
+    return repo.record_eod_snapshot(
+        trading_date=trading_date,
+        ts=now,
+        cash=repo.cash(),
+        equity=equity,
+        gross=gross,
+        daily_start_equity=repo.db.get_state(
+            "daily_start_equity",
+            build_config()["account"]["starting_capital"],
+        ),
+        drawdown5=drawdown,
     )
 
 
@@ -104,6 +155,7 @@ def main():
     broker = PaperBroker(cfg, repo)
     risk = RiskEngine(cfg, repo)
     strategy = BaselineBreakoutStrategy()
+    session = SessionGuard(cfg)
 
     # Restore strategy history from durable storage before processing
     # any new bars. This is required for correct indicator state after
@@ -115,6 +167,14 @@ def main():
 
     for bar in sorted(bars, key=lambda item: item.end):
         now = bar.end
+
+        session.ensure_daily_state(
+            repo,
+            now,
+            cfg["account"]["starting_capital"],
+        )
+
+        session_state = session.snapshot(now)
 
         # A completed bar must never be processed twice after restart.
         checkpoint = repo.get_checkpoint(bar.symbol)
@@ -143,7 +203,7 @@ def main():
         # Manage existing positions before evaluating new entries.
         position = repo.positions().get(bar.symbol)
 
-        if position:
+        if position and session_state.exits_allowed:
             if quote.bid <= position.stop_price:
                 broker.sell(
                     bar.symbol,
@@ -167,8 +227,16 @@ def main():
                     position.strategy_version,
                     ExitReason.TARGET,
                 )
+            elif session_state.state.value == "EOD":
+                broker.sell(
+                    bar.symbol,
+                    quote,
+                    now,
+                    position.strategy_version,
+                    ExitReason.FORCED,
+                )
 
-        if len(history[bar.symbol]) >= 35:
+        if len(history[bar.symbol]) >= 35 and session_state.entries_allowed:
             position_exists = bar.symbol in repo.positions()
             cooldown = repo.in_cooldown(bar.symbol, now)
 
@@ -225,6 +293,11 @@ def main():
 
         # Persist the account state after processing the bar.
         snapshot(repo, risk, quotes, now)
+
+        # A completed EOD mark is authoritative for the next
+        # trading day and for rolling drawdown calculations.
+        if session_state.state.value == "EOD" and session_state.is_trading_day:
+            record_eod(repo, risk, now)
 
     print(
         {
