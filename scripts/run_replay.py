@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import timedelta
 from decimal import Decimal
 
 from nse_paper_agent.data.provider import load_bars_csv
@@ -82,8 +83,17 @@ def main():
     db.initialize()
 
     repo = Repository(db)
-    repo.set_cash(cfg["account"]["starting_capital"])
-    repo.db.set_state("daily_start_equity", cfg["account"]["starting_capital"])
+
+    # Initialize account state only for a brand-new database.
+    # Never overwrite persisted account state during restart/recovery.
+    if repo.db.get_state("cash") is None:
+        repo.set_cash(cfg["account"]["starting_capital"])
+
+    if repo.db.get_state("daily_start_equity") is None:
+        repo.db.set_state(
+            "daily_start_equity",
+            cfg["account"]["starting_capital"],
+        )
 
     broker = PaperBroker(cfg, repo)
     risk = RiskEngine(cfg, repo)
