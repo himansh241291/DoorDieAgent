@@ -23,6 +23,7 @@ risk:
   slippage_bps: 10
   max_spread_bps: 50
 session:
+  pre_open: "09:00"
   open: "09:15"
   close: "15:30"
   entry_cutoff: "14:45"
