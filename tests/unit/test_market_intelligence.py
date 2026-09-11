@@ -1,9 +1,11 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 
 import pytest
 
-from nse_paper_agent.domain.models import Regime
+from nse_paper_agent.domain.models import Bar, Regime
 from nse_paper_agent.regime.engine import RegimeEngine
+from nse_paper_agent.regime.intelligence import MarketIntelligence
 from nse_paper_agent.sentiment.provider import CompositeSentiment, NeutralSentimentProvider
 
 
@@ -41,14 +43,39 @@ def test_neutral_sentiment_does_not_fabricate_news():
 
 
 def test_composite_sentiment_is_bounded_and_supports_missing_news():
-    composite = CompositeSentiment({
-        "trend": 0.35,
-        "breadth": 0.25,
-        "relative_strength": 0.20,
-        "volume_confirmation": 0.10,
-        "news": 0.10,
-    })
+    composite = CompositeSentiment({"trend": 0.35,"breadth": 0.25,"relative_strength": 0.20,"volume_confirmation": 0.10,"news": 0.10})
     assert composite.score(1, 1, 1, 1, None) == pytest.approx(0.9)
     assert composite.score(-1, -1, -1, -1, -1) == pytest.approx(-1.0)
-    with pytest.raises(ValueError):
-        composite.score(1.1, 0, 0, 0, 0)
+    with pytest.raises(ValueError): composite.score(1.1, 0, 0, 0, 0)
+
+
+def _bar(symbol, day, minute, close, high=None, low=None, volume=100):
+    start = datetime(2026, 1, 1, 9, 15, tzinfo=timezone.utc) + timedelta(days=day, minutes=minute)
+    return Bar(symbol,start,start+timedelta(minutes=5),Decimal(str(close)),Decimal(str(high or close)),Decimal(str(low or close)),Decimal(str(close)),Decimal(str(volume)))
+
+
+def test_daily_bars_aggregate_intraday_data():
+    bars = [_bar("ABC",0,0,100,102,99,10),_bar("ABC",0,5,101,103,100,20),_bar("ABC",1,0,102,104,101,30)]
+    daily = MarketIntelligence.daily_bars(bars)
+    assert len(daily) == 2
+    assert daily[0].open == Decimal("100")
+    assert daily[0].high == Decimal("103")
+    assert daily[0].low == Decimal("99")
+    assert daily[0].close == Decimal("101")
+    assert daily[0].volume == Decimal("30")
+
+
+def test_breadth_requires_minimum_eligible_universe():
+    engine = MarketIntelligence(breadth_min_symbols=2)
+    bars = {"A": [_bar("A",d,0,100+d) for d in range(20)],"B": [_bar("B",d,0,100+d) for d in range(20)]}
+    assert engine.breadth(bars) == pytest.approx(1.0)
+    assert engine.breadth({"A": bars["A"]}) is None
+
+
+def test_market_intelligence_fails_closed_without_benchmark_history():
+    engine = MarketIntelligence(benchmark_min_bars=50)
+    result = engine.calculate([], {})
+    assert result["close"] is None
+    assert result["sma20"] is None
+    assert result["sma50"] is None
+    assert result["breadth20"] is None
