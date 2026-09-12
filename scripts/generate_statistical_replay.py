@@ -15,6 +15,7 @@ IST = ZoneInfo("Asia/Kolkata")
 SYMBOLS = ["ALPHA", "BETA", "GAMMA", "DELTA", "EPSILON"]
 BENCHMARK = "NIFTY50"
 EVENT_TIME = time(13, 55)
+EVENT_MULTIPLIER = Decimal("1.0010")
 
 
 def weekdays(start: date, count: int) -> list[date]:
@@ -31,14 +32,7 @@ def price_pattern(symbol_index: int, day_index: int, bar_index: int) -> Decimal:
     base = Decimal(str(50 + symbol_index * 7)) * Decimal("1.0025") ** day_index
     if bar_index < 36:
         return base
-    # Build a controlled pre-breakout sequence that guarantees:
-    # previous close <= previous SMA20, current close > current SMA20,
-    # while keeping RSI14 in the production 50-70 band.
-    if 36 <= bar_index <= 54:
-        return base * (Decimal("0.9985") if bar_index % 2 == 0 else Decimal("0.9975"))
-    if bar_index == 55:
-        return base * Decimal("0.9965")
-    return base * Decimal("1.002")
+    return base * (Decimal("1.0003") if bar_index % 2 == 0 else Decimal("0.9997"))
 
 
 def outcome(symbol_index: int, day_index: int, event_close: Decimal) -> Decimal:
@@ -82,12 +76,13 @@ def build_rows(days: list[date]) -> list[dict[str, str]]:
                 close = base
 
                 if symbol != BENCHMARK and day_index >= 81 and bar_index >= 36:
+                    close = price_pattern(symbol_index - 1, day_index, bar_index)
                     if end.time().replace(tzinfo=None) == EVENT_TIME:
-                        close = base * Decimal("1.002")
+                        # Small controlled crossover: enough to move above SMA20
+                        # while keeping RSI inside the production 50-70 band.
+                        close = base * EVENT_MULTIPLIER
                     elif end.time().replace(tzinfo=None) > EVENT_TIME:
-                        close = outcome(symbol_index - 1, day_index, base * Decimal("1.002"))
-                    else:
-                        close = price_pattern(symbol_index - 1, day_index, bar_index)
+                        close = outcome(symbol_index - 1, day_index, base * EVENT_MULTIPLIER)
 
                 volume = Decimal("250000") if symbol == BENCHMARK else Decimal(str(150000 + symbol_index * 10000))
                 rows.append(make_row(symbol, start, end, close, volume))
@@ -121,7 +116,16 @@ def validate_preview(rows: list[dict[str, str]], days: list[date]) -> tuple[int,
             and bar.end.time().replace(tzinfo=None) == EVENT_TIME
             and bar.end.date() >= mature_start
         ):
-            signal = strategy.evaluate(history[symbol], bar.end, Regime.RISK_ON, 0.5, False, False, True, True)
+            signal = strategy.evaluate(
+                history[symbol],
+                bar.end,
+                Regime.RISK_ON,
+                0.5,
+                False,
+                False,
+                True,
+                True,
+            )
             if signal.eligible:
                 signals += 1
                 if len(first_events) < 5:
