@@ -31,11 +31,17 @@ def price_pattern(symbol_index: int, day_index: int, bar_index: int) -> Decimal:
     base = Decimal(str(50 + symbol_index * 7)) * Decimal("1.0025") ** day_index
     if bar_index < 36:
         return base
-    return base * (Decimal("1.0003") if bar_index % 2 == 0 else Decimal("0.9997"))
+    # Build a controlled pre-breakout sequence that guarantees:
+    # previous close <= previous SMA20, current close > current SMA20,
+    # while keeping RSI14 in the production 50-70 band.
+    if 36 <= bar_index <= 54:
+        return base * (Decimal("0.9985") if bar_index % 2 == 0 else Decimal("0.9975"))
+    if bar_index == 55:
+        return base * Decimal("0.9965")
+    return base * Decimal("1.002")
 
 
 def outcome(symbol_index: int, day_index: int, event_close: Decimal) -> Decimal:
-    # One target, one stop, and three controlled EOD outcomes each mature day.
     role = symbol_index
     if role == 0:
         return event_close * Decimal("1.070")
@@ -76,22 +82,24 @@ def build_rows(days: list[date]) -> list[dict[str, str]]:
                 close = base
 
                 if symbol != BENCHMARK and day_index >= 81 and bar_index >= 36:
-                    close = price_pattern(symbol_index - 1, day_index, bar_index)
                     if end.time().replace(tzinfo=None) == EVENT_TIME:
-                        close = base * Decimal("1.004")
+                        close = base * Decimal("1.002")
                     elif end.time().replace(tzinfo=None) > EVENT_TIME:
-                        close = outcome(symbol_index - 1, day_index, base * Decimal("1.004"))
+                        close = outcome(symbol_index - 1, day_index, base * Decimal("1.002"))
+                    else:
+                        close = price_pattern(symbol_index - 1, day_index, bar_index)
 
                 volume = Decimal("250000") if symbol == BENCHMARK else Decimal(str(150000 + symbol_index * 10000))
                 rows.append(make_row(symbol, start, end, close, volume))
     return rows
 
 
-def validate_preview(rows: list[dict[str, str]], days: list[date]) -> int:
+def validate_preview(rows: list[dict[str, str]], days: list[date]) -> tuple[int, list[str]]:
     history: dict[str, list[Bar]] = {symbol: [] for symbol in [BENCHMARK, *SYMBOLS]}
     strategy = BaselineBreakoutStrategy()
     signals = 0
     first_events: list[str] = []
+    mature_start = days[81] if len(days) > 81 else None
 
     for row in rows:
         symbol = row["symbol"]
@@ -107,23 +115,13 @@ def validate_preview(rows: list[dict[str, str]], days: list[date]) -> int:
         )
         history[symbol].append(bar)
 
-        event_day = days[81] if len(days) > 81 else None
         if (
             symbol in SYMBOLS
+            and mature_start is not None
             and bar.end.time().replace(tzinfo=None) == EVENT_TIME
-            and event_day is not None
-            and bar.end.date() >= event_day
+            and bar.end.date() >= mature_start
         ):
-            signal = strategy.evaluate(
-                history[symbol],
-                bar.end,
-                Regime.RISK_ON,
-                0.5,
-                False,
-                False,
-                True,
-                True,
-            )
+            signal = strategy.evaluate(history[symbol], bar.end, Regime.RISK_ON, 0.5, False, False, True, True)
             if signal.eligible:
                 signals += 1
                 if len(first_events) < 5:
