@@ -16,6 +16,7 @@ SYMBOLS = ["ALPHA", "BETA", "GAMMA", "DELTA", "EPSILON"]
 BENCHMARK = "NIFTY50"
 EVENT_TIME = time(13, 55)
 EVENT_MULTIPLIER = Decimal("1.0010")
+PRE_EVENT_MULTIPLIER = Decimal("0.9998")
 
 
 def weekdays(start: date, count: int) -> list[date]:
@@ -77,9 +78,9 @@ def build_rows(days: list[date]) -> list[dict[str, str]]:
 
                 if symbol != BENCHMARK and day_index >= 81 and bar_index >= 36:
                     close = price_pattern(symbol_index - 1, day_index, bar_index)
-                    if end.time().replace(tzinfo=None) == EVENT_TIME:
-                        # Small controlled crossover: enough to move above SMA20
-                        # while keeping RSI inside the production 50-70 band.
+                    if bar_index == 55:
+                        close = base * PRE_EVENT_MULTIPLIER
+                    elif end.time().replace(tzinfo=None) == EVENT_TIME:
                         close = base * EVENT_MULTIPLIER
                     elif end.time().replace(tzinfo=None) > EVENT_TIME:
                         close = outcome(symbol_index - 1, day_index, base * EVENT_MULTIPLIER)
