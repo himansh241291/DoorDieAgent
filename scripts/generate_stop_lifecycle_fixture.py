@@ -15,13 +15,13 @@ def main() -> None:
     parser.add_argument("--output", required=True, help="Output lifecycle replay CSV")
     parser.add_argument(
         "--entry-date",
-        default="2025-05-01",
-        help="Trading date containing the constructed GAMMA breakout (default: 2025-05-01)",
+        default="2025-05-02",
+        help="Trading date containing the production GAMMA breakout (default: 2025-05-02)",
     )
     parser.add_argument(
         "--entry-time",
         default="13:55",
-        help="IST bar end time of the constructed GAMMA breakout (default: 13:55)",
+        help="IST bar end time of the production GAMMA breakout (default: 13:55)",
     )
     args = parser.parse_args()
 
@@ -52,7 +52,7 @@ def main() -> None:
 
     if len(candidates) != 1:
         raise SystemExit(
-            f"Expected exactly one GAMMA breakout at {args.entry_date} {args.entry_time}, "
+            f"Expected exactly one GAMMA production entry bar at {args.entry_date} {args.entry_time}, "
             f"found {len(candidates)}"
         )
 
@@ -68,14 +68,12 @@ def main() -> None:
 
     changed = 0
     armed = False
-    entry_index = None
 
-    for index, row in enumerate(rows):
+    for row in rows:
         if row["symbol"] != "GAMMA":
             continue
         if row["end"] == entry_end:
             armed = True
-            entry_index = index
             continue
         if not armed:
             continue
@@ -90,8 +88,6 @@ def main() -> None:
 
     if changed == 0:
         raise SystemExit("No post-entry GAMMA bars were modified")
-    if entry_index is None:
-        raise SystemExit("GAMMA breakout index was not found")
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     with destination.open("w", newline="") as handle:
