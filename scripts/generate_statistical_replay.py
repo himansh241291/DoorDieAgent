@@ -77,9 +77,9 @@ def build_rows(days: list[date]) -> list[dict[str, str]]:
 
                 if symbol != BENCHMARK and day_index >= 81 and bar_index >= 36:
                     close = price_pattern(symbol_index - 1, day_index, bar_index)
-                    if end.time() == EVENT_TIME:
+                    if end.time().replace(tzinfo=None) == EVENT_TIME:
                         close = base * Decimal("1.004")
-                    elif end.time() > EVENT_TIME:
+                    elif end.time().replace(tzinfo=None) > EVENT_TIME:
                         close = outcome(symbol_index - 1, day_index, base * Decimal("1.004"))
 
                 volume = Decimal("250000") if symbol == BENCHMARK else Decimal(str(150000 + symbol_index * 10000))
@@ -87,10 +87,12 @@ def build_rows(days: list[date]) -> list[dict[str, str]]:
     return rows
 
 
-def validate_preview(rows: list[dict[str, str]]) -> int:
+def validate_preview(rows: list[dict[str, str]], days: list[date]) -> int:
     history: dict[str, list[Bar]] = {symbol: [] for symbol in [BENCHMARK, *SYMBOLS]}
     strategy = BaselineBreakoutStrategy()
     signals = 0
+    first_events: list[str] = []
+
     for row in rows:
         symbol = row["symbol"]
         bar = Bar(
@@ -104,11 +106,30 @@ def validate_preview(rows: list[dict[str, str]]) -> int:
             volume=Decimal(row["volume"]),
         )
         history[symbol].append(bar)
-        if symbol in SYMBOLS and bar.end.time() == EVENT_TIME and bar.end.date() >= days_global[81]:
-            signal = strategy.evaluate(history[symbol], bar.end, Regime.RISK_ON, 0.5, False, False, True, True)
+
+        event_day = days[81] if len(days) > 81 else None
+        if (
+            symbol in SYMBOLS
+            and bar.end.time().replace(tzinfo=None) == EVENT_TIME
+            and event_day is not None
+            and bar.end.date() >= event_day
+        ):
+            signal = strategy.evaluate(
+                history[symbol],
+                bar.end,
+                Regime.RISK_ON,
+                0.5,
+                False,
+                False,
+                True,
+                True,
+            )
             if signal.eligible:
                 signals += 1
-    return signals
+                if len(first_events) < 5:
+                    first_events.append(f"{symbol}@{bar.end.isoformat()}")
+
+    return signals, first_events
 
 
 def main() -> None:
@@ -118,10 +139,9 @@ def main() -> None:
     parser.add_argument("--start-date", default="2025-01-02")
     args = parser.parse_args()
 
-    global days_global
-    days_global = weekdays(date.fromisoformat(args.start_date), args.days)
-    rows = build_rows(days_global)
-    signals = validate_preview(rows)
+    days = weekdays(date.fromisoformat(args.start_date), args.days)
+    rows = build_rows(days)
+    signals, first_events = validate_preview(rows, days)
 
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -132,12 +152,13 @@ def main() -> None:
 
     print({
         "output": str(output),
-        "trading_days": len(days_global),
+        "trading_days": len(days),
         "rows": len(rows),
         "symbols": len(SYMBOLS) + 1,
-        "mature_days": max(0, len(days_global) - 81),
+        "mature_days": max(0, len(days) - 81),
         "expected_daily_setups": len(SYMBOLS),
         "preview_valid_signals": signals,
+        "first_preview_events": first_events,
     })
 
 
