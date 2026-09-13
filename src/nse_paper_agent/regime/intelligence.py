@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
 from statistics import mean
@@ -21,6 +21,7 @@ class MarketIntelligence:
     volatility_history: int = 60
     breadth_window: int = 20
     breadth_min_symbols: int = 5
+    _daily_cache: dict[int, tuple[int, object, list[Bar]]] = field(default_factory=dict, init=False, repr=False, compare=False)
 
     @staticmethod
     def _closes(bars: list[Bar]) -> list[float]:
@@ -61,8 +62,54 @@ class MarketIntelligence:
             )
         return daily
 
-    def benchmark(self, bars: list[Bar]) -> dict[str, float | bool | None]:
-        closes = self._closes(self.daily_bars(bars))
+    def _cached_daily_bars(self, bars: list[Bar]) -> list[Bar]:
+        if not bars:
+            return []
+
+        key = id(bars)
+        cached = self._daily_cache.get(key)
+        if cached is None:
+            daily = self.daily_bars(bars)
+            self._daily_cache[key] = (len(bars), bars[-1].end, daily)
+            return daily
+
+        processed_len, last_end, daily = cached
+        if len(bars) < processed_len or (processed_len and bars[processed_len - 1].end != last_end):
+            daily = self.daily_bars(bars)
+            self._daily_cache[key] = (len(bars), bars[-1].end, daily)
+            return daily
+
+        if len(bars) == processed_len and bars[-1].end == last_end:
+            return daily
+
+        for bar in bars[processed_len:]:
+            if daily and bar.end <= daily[-1].end:
+                daily = self.daily_bars(bars)
+                self._daily_cache[key] = (len(bars), bars[-1].end, daily)
+                return daily
+
+            trading_date = bar.end.astimezone(IST).date()
+            if not daily or trading_date != daily[-1].end.astimezone(IST).date():
+                daily.append(bar)
+                continue
+
+            previous = daily[-1]
+            daily[-1] = Bar(
+                previous.symbol,
+                previous.start,
+                bar.end,
+                previous.open,
+                max(previous.high, bar.high),
+                min(previous.low, bar.low),
+                bar.close,
+                previous.volume + bar.volume,
+            )
+
+        self._daily_cache[key] = (len(bars), bars[-1].end, daily)
+        return daily
+
+    def _benchmark_from_daily(self, daily: list[Bar]) -> dict[str, float | bool | None]:
+        closes = self._closes(daily)
         valid = [v for v in closes if v > 0 and math.isfinite(v)]
         if len(closes) < self.benchmark_min_bars:
             return {"close": closes[-1] if closes else None, "sma20": None, "sma50": None, "vol_percentile": None, "vol_shock": None}
@@ -100,10 +147,13 @@ class MarketIntelligence:
 
         return {"close": closes[-1], "sma20": sma20, "sma50": sma50, "vol_percentile": percentile, "vol_shock": vol_shock}
 
-    def breadth(self, bars_by_symbol: dict[str, list[Bar]]) -> float | None:
+    def benchmark(self, bars: list[Bar]) -> dict[str, float | bool | None]:
+        return self._benchmark_from_daily(self.daily_bars(bars))
+
+    def _breadth_from_daily(self, daily_by_symbol: dict[str, list[Bar]]) -> float | None:
         eligible = above = 0
-        for bars in bars_by_symbol.values():
-            closes = self._closes(self.daily_bars(bars))
+        for daily in daily_by_symbol.values():
+            closes = self._closes(daily)
             valid = [v for v in closes if v > 0 and math.isfinite(v)]
             sma20 = self._sma(valid, self.breadth_window)
             if sma20 is None or not closes or closes[-1] <= 0 or not math.isfinite(closes[-1]):
@@ -112,7 +162,12 @@ class MarketIntelligence:
             above += closes[-1] > sma20
         return above / eligible if eligible >= self.breadth_min_symbols else None
 
+    def breadth(self, bars_by_symbol: dict[str, list[Bar]]) -> float | None:
+        return self._breadth_from_daily({symbol: self.daily_bars(bars) for symbol, bars in bars_by_symbol.items()})
+
     def calculate(self, benchmark_bars: list[Bar], bars_by_symbol: dict[str, list[Bar]]) -> dict[str, float | bool | None]:
-        result = self.benchmark(benchmark_bars)
-        result["breadth20"] = self.breadth(bars_by_symbol)
+        result = self._benchmark_from_daily(self._cached_daily_bars(benchmark_bars))
+        result["breadth20"] = self._breadth_from_daily(
+            {symbol: self._cached_daily_bars(bars) for symbol, bars in bars_by_symbol.items()}
+        )
         return result
