@@ -69,3 +69,23 @@ def test_invalid_price_history_degrades_volatility_inputs():
     assert result["sma50"] == pytest.approx(100.0)
     assert result["vol_percentile"] is None
     assert result["vol_shock"] is None
+
+
+def test_incremental_calculate_matches_full_rebuild():
+    benchmark = []
+    symbols = {f"S{i}": [] for i in range(5)}
+    engine = MarketIntelligence(volatility_history=5)
+
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    for day in range(60):
+        end = start + timedelta(days=day + 1)
+        benchmark.append(Bar("NIFTY50", start + timedelta(days=day), end, Decimal(str(100 + day)), Decimal(str(100 + day)), Decimal(str(100 + day)), Decimal(str(100 + day)), Decimal("100000")))
+        for i, bars in enumerate(symbols.values()):
+            close = 100 + day + i
+            bars.append(Bar(f"S{i}", start + timedelta(days=day), end, Decimal(str(close)), Decimal(str(close)), Decimal(str(close)), Decimal(str(close)), Decimal("100000")))
+
+        incremental = engine.calculate(benchmark, symbols)
+        rebuilt = MarketIntelligence(volatility_history=5).calculate(
+            benchmark, symbols
+        )
+        assert incremental == pytest.approx(rebuilt, nan_ok=True)
