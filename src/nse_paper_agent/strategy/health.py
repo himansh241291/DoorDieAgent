@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
-from math import isfinite, sqrt
-from statistics import mean
 from typing import Iterable, Mapping
 
 from nse_paper_agent.domain.models import Regime
+from nse_paper_agent.strategy.evidence import StrategyEvidence, StrategyEvidenceEngine, StrategyOutcome
 from nse_paper_agent.strategy.portfolio import StrategyAvailability, StrategyHealth
 
 
@@ -19,22 +17,19 @@ class StrategyHealthPolicy:
     max_drawdown_limit: float = 0.04
 
 
-@dataclass(frozen=True)
-class StrategyOutcome:
-    version: str
-    net_pnl: float
-    exit_ts: datetime
-    regime: str | None = None
-
-
 class StrategyHealthEngine:
-    """Build deterministic strategy health from completed trade outcomes only.
+    """Translate descriptive evidence into conservative selection health.
 
-    This layer observes performance. It cannot modify risk, strategy code, or
-    production identity. Health is evidence for selection, not a promotion gate.
+    Evidence describes what happened. Health decides whether the evidence is
+    strong enough for strategy selection. Neither layer changes risk controls,
+    strategy code, or production identity.
     """
 
-    def __init__(self, policy: StrategyHealthPolicy | None = None):
+    def __init__(
+        self,
+        policy: StrategyHealthPolicy | None = None,
+        evidence_engine: StrategyEvidenceEngine | None = None,
+    ):
         self.policy = policy or StrategyHealthPolicy()
         if self.policy.min_samples <= 0:
             raise ValueError("min_samples must be positive")
@@ -46,31 +41,54 @@ class StrategyHealthEngine:
             raise ValueError("degradation_expectancy_factor must be in (0, 1]")
         if not 0 < self.policy.max_drawdown_limit < 1:
             raise ValueError("max_drawdown_limit must be in (0, 1)")
+        self.evidence_engine = evidence_engine or StrategyEvidenceEngine(self.policy.recent_window)
 
-    @staticmethod
-    def _confidence(values: list[float]) -> float:
-        if len(values) < 2:
-            return 0.0
-        avg = mean(values)
-        if avg <= 0 or not isfinite(avg):
-            return 0.0
-        variance = mean([(value - avg) ** 2 for value in values])
-        se = sqrt(variance / len(values))
-        if not isfinite(se):
-            return 0.0
-        return max(0.0, min(1.0, (avg - 1.96 * se) / avg))
+    def _health_from_evidence(self, evidence: StrategyEvidence) -> StrategyHealth:
+        overall = evidence.overall
+        recent = evidence.recent
+        regime_expectancy = {
+            name: aggregate.expectancy
+            for name, aggregate in evidence.by_regime.items()
+            if aggregate.expectancy is not None
+            and aggregate.samples >= self.policy.min_regime_samples
+        }
 
-    @staticmethod
-    def _drawdown(values: list[float], starting_equity: float = 50000.0) -> float:
-        equity = float(starting_equity)
-        peak = equity
-        max_dd = 0.0
-        for pnl in values:
-            equity += pnl
-            peak = max(peak, equity)
-            if peak > 0:
-                max_dd = max(max_dd, (peak - equity) / peak)
-        return max_dd
+        availability = StrategyAvailability.ACTIVE
+        selection_ready = overall.samples >= self.policy.min_samples
+        reason = "insufficient_evidence"
+
+        if overall.samples == 0:
+            reason = "no_trade_evidence"
+            selection_ready = False
+        elif overall.max_drawdown is not None and overall.max_drawdown > self.policy.max_drawdown_limit:
+            availability = StrategyAvailability.PAUSED
+            reason = "drawdown_limit_exceeded"
+            selection_ready = False
+        elif (
+            selection_ready
+            and overall.expectancy is not None
+            and recent.expectancy is not None
+            and overall.expectancy > 0
+            and recent.expectancy < overall.expectancy * self.policy.degradation_expectancy_factor
+        ):
+            availability = StrategyAvailability.PAUSED
+            reason = "recent_expectancy_degradation"
+            selection_ready = False
+        elif selection_ready:
+            reason = "evidence_ready"
+
+        return StrategyHealth(
+            version=evidence.version,
+            samples=overall.samples,
+            expectancy=overall.expectancy,
+            recent_expectancy=recent.expectancy,
+            max_drawdown=overall.max_drawdown,
+            confidence=overall.confidence,
+            regime_expectancy=regime_expectancy,
+            availability=availability,
+            selection_ready=selection_ready,
+            reason=reason,
+        )
 
     def compute(
         self,
@@ -78,67 +96,5 @@ class StrategyHealthEngine:
         active_versions: Iterable[str],
         regime: Regime | None = None,
     ) -> Mapping[str, StrategyHealth]:
-        grouped: dict[str, list[StrategyOutcome]] = {}
-        for outcome in outcomes:
-            if not isfinite(float(outcome.net_pnl)):
-                continue
-            grouped.setdefault(outcome.version, []).append(outcome)
-
-        active = set(active_versions)
-        result: dict[str, StrategyHealth] = {}
-        for version in sorted(active):
-            rows = sorted(grouped.get(version, []), key=lambda row: row.exit_ts)
-            pnls = [float(row.net_pnl) for row in rows]
-            recent = pnls[-self.policy.recent_window :]
-            expectancy = mean(pnls) if pnls else None
-            recent_expectancy = mean(recent) if recent else None
-            max_dd = self._drawdown(pnls) if pnls else None
-            confidence = self._confidence(pnls)
-
-            by_regime: dict[str, list[float]] = {}
-            for row in rows:
-                if row.regime:
-                    by_regime.setdefault(row.regime, []).append(float(row.net_pnl))
-            regime_expectancy = {
-                name: mean(values)
-                for name, values in by_regime.items()
-                if len(values) >= self.policy.min_regime_samples
-            }
-
-            availability = StrategyAvailability.ACTIVE
-            selection_ready = len(pnls) >= self.policy.min_samples
-            reason = "insufficient_evidence"
-
-            if not pnls:
-                reason = "no_trade_evidence"
-                selection_ready = False
-            elif max_dd is not None and max_dd > self.policy.max_drawdown_limit:
-                availability = StrategyAvailability.PAUSED
-                reason = "drawdown_limit_exceeded"
-                selection_ready = False
-            elif (
-                selection_ready
-                and expectancy is not None
-                and recent_expectancy is not None
-                and expectancy > 0
-                and recent_expectancy < expectancy * self.policy.degradation_expectancy_factor
-            ):
-                availability = StrategyAvailability.PAUSED
-                reason = "recent_expectancy_degradation"
-                selection_ready = False
-            elif selection_ready:
-                reason = "evidence_ready"
-
-            result[version] = StrategyHealth(
-                version=version,
-                samples=len(pnls),
-                expectancy=expectancy,
-                recent_expectancy=recent_expectancy,
-                max_drawdown=max_dd,
-                confidence=confidence,
-                regime_expectancy=regime_expectancy,
-                availability=availability,
-                selection_ready=selection_ready,
-                reason=reason,
-            )
-        return result
+        evidence = self.evidence_engine.compute(outcomes, active_versions)
+        return {version: self._health_from_evidence(record) for version, record in evidence.items()}
