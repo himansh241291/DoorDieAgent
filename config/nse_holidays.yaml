@@ -13,3 +13,10 @@ holidays:
   - 2026-11-09
   - 2026-11-24
   - 2026-12-25
+
+# Exchange-notified regular-market session overrides.
+# 2025-10-21 was the Diwali Muhurat Trading session.
+special_sessions:
+  2025-10-21:
+    open: "13:45"
+    close: "14:45"
