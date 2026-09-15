@@ -1,0 +1,56 @@
+from datetime import datetime, timezone
+
+from nse_paper_agent.domain.models import Regime, RegimeSnapshot
+from nse_paper_agent.persistence.db import Database
+from nse_paper_agent.persistence.repository import Repository
+
+
+def test_strategy_outcomes_include_latest_exit_regime(tmp_path):
+    db = Database(str(tmp_path / "state.sqlite3"))
+    db.initialize()
+    repo = Repository(db)
+    ts = datetime(2026, 1, 1, 10, 0, tzinfo=timezone.utc)
+
+    repo.record_regime(RegimeSnapshot(ts, Regime.RISK_ON, {"close": 100.0}, "test"))
+    db.conn.execute(
+        """
+        INSERT INTO closed_trades
+        (symbol, qty, entry_price, exit_price, entry_fee, exit_fee, gross_pnl,
+         net_pnl, entry_ts_utc, exit_ts_utc, strategy_version, exit_reason,
+         holding_seconds, mae, mfe)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            "ABC", 1, 100.0, 110.0, 20.0, 20.0, 10.0, 5.0,
+            (ts.replace(minute=55)).isoformat(), ts.isoformat(),
+            "strategy-a", "TARGET", 300, None, None,
+        ),
+    )
+
+    outcomes = repo.strategy_outcomes()
+    assert len(outcomes) == 1
+    assert outcomes[0].version == "strategy-a"
+    assert outcomes[0].net_pnl == 5.0
+    assert outcomes[0].regime == Regime.RISK_ON.value
+    db.close()
+
+
+def test_strategy_metric_is_persisted(tmp_path):
+    db = Database(str(tmp_path / "state.sqlite3"))
+    db.initialize()
+    repo = Repository(db)
+    ts = datetime(2026, 1, 1, 10, 0, tzinfo=timezone.utc)
+
+    repo.record_strategy_metric(
+        "strategy-a",
+        ts,
+        {"samples": 20, "expectancy": 12.5, "selection_ready": True},
+        Regime.RISK_ON,
+    )
+    row = db.conn.execute(
+        "SELECT version, regime, computed_ts_utc, metrics_json FROM strategy_metrics"
+    ).fetchone()
+    assert row["version"] == "strategy-a"
+    assert row["regime"] == "RISK_ON"
+    assert '"selection_ready": true' in row["metrics_json"]
+    db.close()
