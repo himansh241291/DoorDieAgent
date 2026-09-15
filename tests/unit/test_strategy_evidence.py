@@ -3,11 +3,11 @@ from datetime import datetime, timedelta, timezone
 from nse_paper_agent.strategy.evidence import StrategyEvidenceEngine, StrategyOutcome
 
 
-BASE = datetime(2026, 1, 1, 9, 15, tzinfo=timezone.utc)
+BASE = datetime(2026, 1, 1, 4, 30, tzinfo=timezone.utc)  # 10:00 IST
 
 
 def outcome(version, pnl, index, symbol, regime, hour, reason="TARGET"):
-    entry = BASE + timedelta(days=index, hours=hour - 9)
+    entry = BASE + timedelta(days=index, hours=hour - 10)
     return StrategyOutcome(
         version=version,
         net_pnl=float(pnl),
