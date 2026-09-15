@@ -1,14 +1,17 @@
-from datetime import datetime, timezone
+from datetime import datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from nse_paper_agent.strategy.diagnosis import StrategyDiagnosisEngine, StrategyDiagnosisPolicy
-from nse_paper_agent.strategy.evidence import StrategyEvidence, StrategyEvidenceEngine, StrategyOutcome
+from nse_paper_agent.strategy.evidence import StrategyEvidenceEngine, StrategyOutcome
 
 
-BASE = datetime(2026, 1, 1, 9, 15, tzinfo=timezone.utc)
+IST = ZoneInfo("Asia/Kolkata")
+BASE = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
 
 
-def outcome(version, pnl, index, symbol="AAA", regime="RISK_ON", reason="TARGET"):
-    entry = BASE.replace(day=1 + index)
+def outcome(version, pnl, index, symbol="AAA", regime="RISK_ON", reason="TARGET", local_hour=10):
+    local_entry = datetime(2026, 1, 1 + index, local_hour, 0, tzinfo=IST)
+    entry = local_entry.astimezone(timezone.utc)
     return StrategyOutcome(
         version=version,
         net_pnl=float(pnl),
@@ -67,9 +70,9 @@ def test_weak_regime_is_detected_only_with_enough_samples():
 def test_weak_time_bucket_is_detected_with_enough_samples():
     rows = []
     for i in range(10):
-        rows.append(outcome("a", -3, i, symbol="AAA"))
+        rows.append(outcome("a", -3, i, symbol="AAA", local_hour=10))
     for i in range(10, 20):
-        rows.append(outcome("a", 5, i, symbol="BBB"))
+        rows.append(outcome("a", 5, i, symbol="BBB", local_hour=14))
     evidence = make_evidence(rows)
     diagnosis = StrategyDiagnosisEngine().diagnose(evidence)
     assert diagnosis.eligible
