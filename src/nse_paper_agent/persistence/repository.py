@@ -28,11 +28,11 @@ class Repository:
     def market_bars(self, symbol):
         from datetime import datetime
         from nse_paper_agent.domain.models import Bar
-        rows = self.db.conn.execute("SELECT symbol,start_utc,end_utc,open,high,low,close,volume FROM market_bars WHERE symbol=? ORDER BY end_utc", (symbol,)).fetchall()
+        rows=self.db.conn.execute("SELECT symbol,start_utc,end_utc,open,high,low,close,volume FROM market_bars WHERE symbol=? ORDER BY end_utc",(symbol,)).fetchall()
         return [Bar(symbol=row["symbol"],start=datetime.fromisoformat(row["start_utc"]),end=datetime.fromisoformat(row["end_utc"]),open=Decimal(str(row["open"])),high=Decimal(str(row["high"])),low=Decimal(str(row["low"])),close=Decimal(str(row["close"])),volume=Decimal(str(row["volume"]))) for row in rows]
     def record_quote(self,q): self.db.conn.execute("INSERT INTO quotes(symbol,ts_utc,bid,ask,last,volume) VALUES(?,?,?,?,?,?)",(q.symbol,iso(q.ts),float(q.bid) if q.bid is not None else None,float(q.ask) if q.ask is not None else None,float(q.last) if q.last is not None else None,float(q.volume)))
     def record_regime(self,r): self.db.conn.execute("INSERT INTO market_regimes(ts_utc,regime,metrics_json,reason) VALUES(?,?,?,?)",(iso(r.ts),r.regime.value,json.dumps(r.metrics),r.reason))
-    def record_sentiment(self,s): self.db.conn.execute("INSERT INTO sentiment_observations(symbol,ts_utc,score,confidence,source,fresh_until_utc,components_json) VALUES(?,?,?,?,?,?,?)",(s.symbol,iso(s.ts),s.score,s.confidence,s.source,iso(s.fresh_until) if s.fresh_until else None,json.dumps(s.components)))
+    def record_sentiment(self,s): self.db.conn.execute("INSERT INTO sentiment_observations(symbol,ts_utc,score,confidence,source,fresh_until_utc,components_json) VALUES(?,?,?,?,?,?,?)",(s.symbol,iso(s.ts),s.score,s.confidence, s.source,iso(s.fresh_until) if s.fresh_until else None,json.dumps(s.components)))
     def record_risk(self,ts,event_type,allowed,reason,details): self.db.conn.execute("INSERT INTO risk_events(ts_utc,event_type,allowed,reason,details_json) VALUES(?,?,?,?,?)",(iso(ts),event_type,int(allowed) if allowed is not None else None,reason,json.dumps(details,default=str)))
     def record_system(self,ts,event_type,details): self.db.conn.execute("INSERT INTO system_events(ts_utc,event_type,details_json) VALUES(?,?,?)",(iso(ts),event_type,json.dumps(details,default=str)))
     def record_data_health(self,ts,healthy,reason,details): self.db.conn.execute("INSERT INTO data_health_events(ts_utc,healthy,reason,details_json) VALUES(?,?,?,?)",(iso(ts),int(healthy),reason,json.dumps(details,default=str)))
@@ -44,10 +44,11 @@ class Repository:
     def set_checkpoint(self,symbol,bar_end): self.db.set_state(f"checkpoint:{symbol}",iso(bar_end))
 
     def strategy_outcomes(self):
-        from nse_paper_agent.strategy.health import StrategyOutcome
-        rows = self.db.conn.execute(
+        from nse_paper_agent.strategy.evidence import StrategyOutcome
+        rows=self.db.conn.execute(
             """
-            SELECT c.strategy_version, c.net_pnl, c.exit_ts_utc,
+            SELECT c.strategy_version, c.net_pnl, c.entry_ts_utc, c.exit_ts_utc,
+                   c.symbol, c.exit_reason, c.holding_seconds,
                    (
                        SELECT mr.regime
                        FROM market_regimes mr
@@ -60,15 +61,7 @@ class Repository:
             """
         ).fetchall()
         from datetime import datetime
-        return [
-            StrategyOutcome(
-                version=row["strategy_version"],
-                net_pnl=float(row["net_pnl"]),
-                exit_ts=datetime.fromisoformat(row["exit_ts_utc"]),
-                regime=row["regime"],
-            )
-            for row in rows
-        ]
+        return [StrategyOutcome(version=row["strategy_version"],net_pnl=float(row["net_pnl"]),exit_ts=datetime.fromisoformat(row["exit_ts_utc"]),regime=row["regime"],symbol=row["symbol"],entry_ts=datetime.fromisoformat(row["entry_ts_utc"]),exit_reason=row["exit_reason"],holding_seconds=row["holding_seconds"]) for row in rows]
 
     def record_strategy_metric(self, version, computed_ts, metrics, regime=None):
         self.db.conn.execute("INSERT INTO strategy_metrics(version,regime,computed_ts_utc,metrics_json) VALUES(?,?,?,?)",(str(version),regime.value if hasattr(regime,"value") else regime,iso(computed_ts),json.dumps(metrics,default=str,sort_keys=True)))
