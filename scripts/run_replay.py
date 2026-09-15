@@ -79,6 +79,9 @@ def main():
 
     for bar in sorted(bars, key=lambda item: item.end):
         now = bar.end
+        if not session.regular_bar_start(bar.start):
+            continue
+
         session.ensure_daily_state(repo, now, cfg["account"]["starting_capital"])
         session_state = session.snapshot(now)
         checkpoint = repo.get_checkpoint(bar.symbol)
