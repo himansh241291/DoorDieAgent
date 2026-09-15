@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import json
 import sqlite3
 from collections import defaultdict
 from dataclasses import dataclass
@@ -18,6 +17,7 @@ from nse_paper_agent.indicators.technical import rsi, sma
 IST = ZoneInfo("Asia/Kolkata")
 DEV_FRACTION = 0.70
 HORIZONS = (30, 60, 120, 240)
+ROUND_TRIP_FEE = 40.0
 
 
 @dataclass(frozen=True)
@@ -81,19 +81,31 @@ def load_entries(db_path: str) -> list[Entry]:
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
         """
+        WITH regime_at_entry AS (
+            SELECT c.id AS trade_id,
+                   mr.regime,
+                   json_extract(mr.metrics_json, '$.breadth20') AS breadth20,
+                   json_extract(mr.metrics_json, '$.vol_percentile') AS vol_percentile,
+                   json_extract(mr.metrics_json, '$.vol_shock') AS vol_shock,
+                   ROW_NUMBER() OVER (PARTITION BY c.id ORDER BY mr.id DESC) AS rn
+            FROM closed_trades c
+            LEFT JOIN market_regimes mr
+              ON mr.ts_utc = c.entry_ts_utc
+        )
         SELECT
             c.id,
             c.symbol,
             c.qty,
             c.entry_price,
             c.entry_ts_utc,
-            mr.regime,
-            json_extract(mr.metrics_json, '$.breadth20') AS breadth20,
-            json_extract(mr.metrics_json, '$.vol_percentile') AS vol_percentile,
-            json_extract(mr.metrics_json, '$.vol_shock') AS vol_shock
+            r.regime,
+            r.breadth20,
+            r.vol_percentile,
+            r.vol_shock
         FROM closed_trades c
-        LEFT JOIN market_regimes mr
-          ON mr.ts_utc = c.entry_ts_utc
+        LEFT JOIN regime_at_entry r
+          ON r.trade_id = c.id
+         AND r.rn = 1
         ORDER BY c.entry_ts_utc, c.id
         """
     ).fetchall()
@@ -135,7 +147,8 @@ def context_for(entry: Entry, bars: list[Bar]) -> Context:
     def ret(n: int) -> float | None:
         if len(closes) <= n:
             return None
-        return (float(closes[-1]) - float(closes[-1 - n])) / float(closes[-1 - n]) * 100.0
+        prior = float(closes[-1 - n])
+        return (float(closes[-1]) - prior) / prior * 100.0 if prior else None
 
     return Context(
         rsi14=rsi14,
@@ -148,11 +161,13 @@ def context_for(entry: Entry, bars: list[Bar]) -> Context:
 
 def target_row(entry: Entry, bars: list[Bar]) -> dict[str, object]:
     context = context_for(entry, bars)
+    entry_ist = entry.ts.astimezone(IST)
     result: dict[str, object] = {
         "id": entry.id,
         "symbol": entry.symbol,
         "entry_ts_utc": entry.ts.isoformat(),
-        "entry_ts_ist": entry.ts.astimezone(IST).isoformat(),
+        "entry_ts_ist": entry_ist.isoformat(),
+        "trading_date_ist": entry_ist.date().isoformat(),
         "qty": entry.qty,
         "entry_price": float(entry.price),
         "regime": entry.regime,
@@ -164,24 +179,32 @@ def target_row(entry: Entry, bars: list[Bar]) -> dict[str, object]:
         "volume_ratio_vs_prev_bar": context.volume_ratio,
         "return_5m_pct": context.return_5m_pct,
         "return_15m_pct": context.return_15m_pct,
-        "time_ist": entry.ts.astimezone(IST).strftime("%H:%M"),
+        "time_ist": entry_ist.strftime("%H:%M"),
     }
-    symbol_bars = bars
+
     for minutes in HORIZONS:
         cutoff = entry.ts + timedelta(minutes=minutes)
-        future = next((bar for bar in symbol_bars if bar.end >= cutoff), None)
+        future = next(
+            (
+                bar
+                for bar in bars
+                if bar.end >= cutoff
+                and bar.end.astimezone(IST).date() == entry_ist.date()
+            ),
+            None,
+        )
         result[f"forward_{minutes}m_pct"] = (
             (float(future.close) - float(entry.price)) / float(entry.price) * 100.0
             if future is not None
             else None
         )
-    # Fixed actual quantity/fee economics for forward-close diagnostics only.
+
     forward60 = result["forward_60m_pct"]
-    if isinstance(forward60, float):
-        gross = float(entry.price) * (forward60 / 100.0) * entry.qty
-        result["forward_60m_net_pnl"] = gross - 40.0
-    else:
-        result["forward_60m_net_pnl"] = None
+    result["forward_60m_net_pnl"] = (
+        float(entry.price) * (float(forward60) / 100.0) * entry.qty - ROUND_TRIP_FEE
+        if isinstance(forward60, float)
+        else None
+    )
     return result
 
 
@@ -194,17 +217,28 @@ def summarize(rows: list[dict[str, object]]) -> dict[str, float | int | None]:
         "trades": len(rows),
         "forward_60m_net_pnl": sum(pnls) if pnls else 0.0,
         "forward_60m_expectancy": mean(pnls) if pnls else None,
-        "forward_60m_positive_pct": sum(v > 0 for v in f60) / len(f60) * 100.0 if f60 else 0.0,
+        "forward_60m_positive_pct": sum(value > 0 for value in f60) / len(f60) * 100.0 if f60 else 0.0,
         "forward_30m_median_pct": median(f30) if f30 else None,
         "forward_60m_median_pct": median(f60) if f60 else None,
         "forward_120m_median_pct": median(f120) if f120 else None,
     }
 
 
-def split(rows: list[dict[str, object]]) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
-    ordered = sorted(rows, key=lambda row: (str(row["entry_ts_utc"]), int(row["id"])))
-    cut = int(len(ordered) * DEV_FRACTION)
-    return ordered[:cut], ordered[cut:]
+def split_by_day(rows: list[dict[str, object]]) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    ordered = sorted(
+        rows,
+        key=lambda row: (
+            str(row["trading_date_ist"]),
+            str(row["entry_ts_utc"]),
+            int(row["id"]),
+        ),
+    )
+    days = sorted({str(row["trading_date_ist"]) for row in ordered})
+    cut = max(1, int(len(days) * DEV_FRACTION))
+    dev_days = set(days[:cut])
+    dev = [row for row in ordered if row["trading_date_ist"] in dev_days]
+    holdout = [row for row in ordered if row["trading_date_ist"] not in dev_days]
+    return dev, holdout
 
 
 def main() -> None:
@@ -221,12 +255,22 @@ def main() -> None:
         raise SystemExit("no closed trades found")
 
     print(f"entries={len(rows)}")
-    print("split=chronological_70pct_development_30pct_holdout")
-    print("NOTE=filters are research candidates only; no strategy configuration is changed")
-    dev, holdout = split(rows)
-    print("SPLIT", {"development": len(dev), "holdout": len(holdout), "development_last": dev[-1]["entry_ts_ist"], "holdout_first": holdout[0]["entry_ts_ist"]})
+    dev, holdout = split_by_day(rows)
+    print("split=chronological_70pct_trading_days_development_30pct_holdout")
+    print("NOTE=filters are predeclared research candidates only; no strategy configuration is changed")
+    print(
+        "SPLIT",
+        {
+            "development": len(dev),
+            "holdout": len(holdout),
+            "development_days": len({str(row['trading_date_ist']) for row in dev}),
+            "holdout_days": len({str(row['trading_date_ist']) for row in holdout}),
+            "development_last": dev[-1]["trading_date_ist"],
+            "holdout_first": holdout[0]["trading_date_ist"],
+        },
+    )
 
-    candidates: list[tuple[str, callable]] = [
+    candidates: list[tuple[str, object]] = [
         ("baseline_all", lambda r: True),
         ("rsi_ge_60", lambda r: r["rsi14"] is not None and float(r["rsi14"]) >= 60.0),
         ("rsi_ge_65", lambda r: r["rsi14"] is not None and float(r["rsi14"]) >= 65.0),
@@ -264,13 +308,27 @@ def main() -> None:
                         "forward_120m_median_pct",
                     )
                 ],
-                sep=",",
+                sep=",
             )
 
     print("=== CONTEXT QUANTILES ===")
-    for field in ("rsi14", "sma20_distance_pct", "volume_ratio_vs_prev_bar", "return_5m_pct", "return_15m_pct"):
+    for field in (
+        "rsi14",
+        "sma20_distance_pct",
+        "volume_ratio_vs_prev_bar",
+        "return_5m_pct",
+        "return_15m_pct",
+    ):
         values = [float(row[field]) for row in rows if row[field] is not None]
-        print(field, {"p25": percentile(values, .25), "median": median(values) if values else None, "p75": percentile(values, .75), "p90": percentile(values, .90)})
+        print(
+            field,
+            {
+                "p25": percentile(values, 0.25),
+                "median": median(values) if values else None,
+                "p75": percentile(values, 0.75),
+                "p90": percentile(values, 0.90),
+            },
+        )
 
     if args.csv:
         with open(args.csv, "w", newline="", encoding="utf-8") as handle:
