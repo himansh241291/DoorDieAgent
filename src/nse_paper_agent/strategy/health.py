@@ -35,6 +35,14 @@ class StrategyHealthEngine:
 
     def __init__(self, policy: StrategyHealthPolicy | None = None):
         self.policy = policy or StrategyHealthPolicy()
+        if self.policy.min_samples <= 0:
+            raise ValueError("min_samples must be positive")
+        if self.policy.recent_window <= 0:
+            raise ValueError("recent_window must be positive")
+        if not 0 < self.policy.degradation_expectancy_factor <= 1:
+            raise ValueError("degradation_expectancy_factor must be in (0, 1]")
+        if not 0 < self.policy.max_drawdown_limit < 1:
+            raise ValueError("max_drawdown_limit must be in (0, 1)")
 
     @staticmethod
     def _confidence(values: list[float]) -> float:
@@ -47,7 +55,6 @@ class StrategyHealthEngine:
         se = sqrt(variance / len(values))
         if not isfinite(se):
             return 0.0
-        # Conservative normal-approximation signal: lower 95% bound above zero.
         return max(0.0, min(1.0, (avg - 1.96 * se) / avg))
 
     @staticmethod
@@ -94,25 +101,39 @@ class StrategyHealthEngine:
             }
 
             availability = StrategyAvailability.ACTIVE
-            if not pnls or len(pnls) < self.policy.min_samples:
-                availability = StrategyAvailability.ACTIVE
+            selection_ready = len(pnls) >= self.policy.min_samples
+            reason = "insufficient_evidence"
+
+            if not pnls:
+                reason = "no_trade_evidence"
+                selection_ready = False
             elif max_dd is not None and max_dd > self.policy.max_drawdown_limit:
                 availability = StrategyAvailability.PAUSED
+                reason = "drawdown_limit_exceeded"
+                selection_ready = False
             elif (
-                expectancy is not None
+                selection_ready
+                and expectancy is not None
                 and recent_expectancy is not None
                 and expectancy > 0
                 and recent_expectancy < expectancy * self.policy.degradation_expectancy_factor
             ):
                 availability = StrategyAvailability.PAUSED
+                reason = "recent_expectancy_degradation"
+                selection_ready = False
+            elif selection_ready:
+                reason = "evidence_ready"
 
             result[version] = StrategyHealth(
                 version=version,
                 samples=len(pnls),
                 expectancy=expectancy,
+                recent_expectancy=recent_expectancy,
                 max_drawdown=max_dd,
                 confidence=confidence,
                 regime_expectancy=regime_expectancy,
                 availability=availability,
+                selection_ready=selection_ready,
+                reason=reason,
             )
         return result
