@@ -28,30 +28,8 @@ class Repository:
     def market_bars(self, symbol):
         from datetime import datetime
         from nse_paper_agent.domain.models import Bar
-
-        rows = self.db.conn.execute(
-            """
-            SELECT symbol,start_utc,end_utc,open,high,low,close,volume
-            FROM market_bars
-            WHERE symbol=?
-            ORDER BY end_utc
-            """,
-            (symbol,),
-        ).fetchall()
-
-        return [
-            Bar(
-                symbol=row["symbol"],
-                start=datetime.fromisoformat(row["start_utc"]),
-                end=datetime.fromisoformat(row["end_utc"]),
-                open=Decimal(str(row["open"])),
-                high=Decimal(str(row["high"])),
-                low=Decimal(str(row["low"])),
-                close=Decimal(str(row["close"])),
-                volume=Decimal(str(row["volume"])),
-            )
-            for row in rows
-        ]
+        rows = self.db.conn.execute("SELECT symbol,start_utc,end_utc,open,high,low,close,volume FROM market_bars WHERE symbol=? ORDER BY end_utc", (symbol,)).fetchall()
+        return [Bar(symbol=row["symbol"],start=datetime.fromisoformat(row["start_utc"]),end=datetime.fromisoformat(row["end_utc"]),open=Decimal(str(row["open"])),high=Decimal(str(row["high"])),low=Decimal(str(row["low"])),close=Decimal(str(row["close"])),volume=Decimal(str(row["volume"]))) for row in rows]
     def record_quote(self,q): self.db.conn.execute("INSERT INTO quotes(symbol,ts_utc,bid,ask,last,volume) VALUES(?,?,?,?,?,?)",(q.symbol,iso(q.ts),float(q.bid) if q.bid is not None else None,float(q.ask) if q.ask is not None else None,float(q.last) if q.last is not None else None,float(q.volume)))
     def record_regime(self,r): self.db.conn.execute("INSERT INTO market_regimes(ts_utc,regime,metrics_json,reason) VALUES(?,?,?,?)",(iso(r.ts),r.regime.value,json.dumps(r.metrics),r.reason))
     def record_sentiment(self,s): self.db.conn.execute("INSERT INTO sentiment_observations(symbol,ts_utc,score,confidence,source,fresh_until_utc,components_json) VALUES(?,?,?,?,?,?,?)",(s.symbol,iso(s.ts),s.score,s.confidence,s.source,iso(s.fresh_until) if s.fresh_until else None,json.dumps(s.components)))
@@ -62,11 +40,8 @@ class Repository:
     def in_cooldown(self,symbol,now):
         r=self.db.conn.execute("SELECT until_utc FROM cooldowns WHERE symbol=?",(symbol,)).fetchone(); return bool(r and __import__('datetime').datetime.fromisoformat(r[0])>now)
 
-    def get_checkpoint(self,symbol):
-        return self.db.get_state(f"checkpoint:{symbol}")
-
-    def set_checkpoint(self,symbol,bar_end):
-        self.db.set_state(f"checkpoint:{symbol}",iso(bar_end))
+    def get_checkpoint(self,symbol): return self.db.get_state(f"checkpoint:{symbol}")
+    def set_checkpoint(self,symbol,bar_end): self.db.set_state(f"checkpoint:{symbol}",iso(bar_end))
 
     def strategy_outcomes(self):
         from nse_paper_agent.strategy.health import StrategyOutcome
@@ -76,7 +51,7 @@ class Repository:
                    (
                        SELECT mr.regime
                        FROM market_regimes mr
-                       WHERE mr.ts_utc <= c.exit_ts_utc
+                       WHERE mr.ts_utc <= c.entry_ts_utc
                        ORDER BY mr.ts_utc DESC, mr.id DESC
                        LIMIT 1
                    ) AS regime
@@ -96,121 +71,22 @@ class Repository:
         ]
 
     def record_strategy_metric(self, version, computed_ts, metrics, regime=None):
-        self.db.conn.execute(
-            "INSERT INTO strategy_metrics(version,regime,computed_ts_utc,metrics_json) VALUES(?,?,?,?)",
-            (
-                str(version),
-                regime.value if hasattr(regime, "value") else regime,
-                iso(computed_ts),
-                json.dumps(metrics, default=str, sort_keys=True),
-            ),
-        )
+        self.db.conn.execute("INSERT INTO strategy_metrics(version,regime,computed_ts_utc,metrics_json) VALUES(?,?,?,?)",(str(version),regime.value if hasattr(regime,"value") else regime,iso(computed_ts),json.dumps(metrics,default=str,sort_keys=True)))
 
-    def record_account_snapshot_and_checkpoint(
-        self,
-        symbol,
-        bar_end,
-        cash,
-        equity,
-        gross,
-        daily_start_equity,
-        drawdown5,
-        trading_date=None,
-        is_eod=False,
-    ):
-        checkpoint_key = f"checkpoint:{symbol}"
-
-        if trading_date is None:
-            trading_date = bar_end.astimezone(IST).date().isoformat()
-
+    def record_account_snapshot_and_checkpoint(self,symbol,bar_end,cash,equity,gross,daily_start_equity,drawdown5,trading_date=None,is_eod=False):
+        checkpoint_key=f"checkpoint:{symbol}"
+        if trading_date is None: trading_date=bar_end.astimezone(IST).date().isoformat()
         with self.db.transaction():
-            self.db.conn.execute(
-                """
-                INSERT INTO account_snapshots
-                (
-                    ts_utc,
-                    ts_ist,
-                    trading_date,
-                    is_eod,
-                    cash,
-                    equity,
-                    gross,
-                    daily_start_equity,
-                    drawdown5
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    iso(bar_end),
-                    iso_ist(bar_end),
-                    str(trading_date),
-                    int(is_eod),
-                    float(cash),
-                    float(equity),
-                    float(gross),
-                    float(daily_start_equity),
-                    float(drawdown5),
-                ),
-            )
+            self.db.conn.execute("INSERT INTO account_snapshots(ts_utc,ts_ist,trading_date,is_eod,cash,equity,gross,daily_start_equity,drawdown5) VALUES(?,?,?,?,?,?,?,?,?)",(iso(bar_end),iso_ist(bar_end),str(trading_date),int(is_eod),float(cash),float(equity),float(gross),float(daily_start_equity),float(drawdown5)))
+            self.db.set_state(checkpoint_key,iso(bar_end))
 
-            self.db.set_state(checkpoint_key, iso(bar_end))
-
-    def record_eod_snapshot(
-        self,
-        trading_date,
-        ts,
-        cash,
-        equity,
-        gross,
-        daily_start_equity,
-        drawdown5,
-    ):
+    def record_eod_snapshot(self,trading_date,ts,cash,equity,gross,daily_start_equity,drawdown5):
         with self.db.transaction():
-            cursor = self.db.conn.execute(
-                """
-                INSERT OR IGNORE INTO account_snapshots
-                (
-                    ts_utc,
-                    ts_ist,
-                    trading_date,
-                    is_eod,
-                    cash,
-                    equity,
-                    gross,
-                    daily_start_equity,
-                    drawdown5
-                )
-                VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?)
-                """,
-                (
-                    iso(ts),
-                    iso_ist(ts),
-                    str(trading_date),
-                    float(cash),
-                    float(equity),
-                    float(gross),
-                    float(daily_start_equity),
-                    float(drawdown5),
-                ),
-            )
-
-            if cursor.rowcount == 1:
-                self.db.set_state("last_eod_trading_date", str(trading_date))
-                self.db.set_state("last_eod_equity", float(equity))
-                self.db.set_state("last_eod_ts_utc", iso(ts))
-                return True
+            cursor=self.db.conn.execute("INSERT OR IGNORE INTO account_snapshots(ts_utc,ts_ist,trading_date,is_eod,cash,equity,gross,daily_start_equity,drawdown5) VALUES(?,?,?,?,?,?,?,?,?)",(iso(ts),iso_ist(ts),str(trading_date),1,float(cash),float(equity),float(gross),float(daily_start_equity),float(drawdown5)))
+            if cursor.rowcount==1:
+                self.db.set_state("last_eod_trading_date",str(trading_date)); self.db.set_state("last_eod_equity",float(equity)); self.db.set_state("last_eod_ts_utc",iso(ts)); return True
             return False
 
-    def eod_marks(self, limit=5):
-        rows = self.db.conn.execute(
-            """
-            SELECT trading_date, ts_utc, ts_ist, equity, daily_start_equity, drawdown5
-            FROM account_snapshots
-            WHERE is_eod=1 AND trading_date <> ''
-            ORDER BY trading_date DESC
-            LIMIT ?
-            """,
-            (int(limit),),
-        ).fetchall()
-
+    def eod_marks(self,limit=5):
+        rows=self.db.conn.execute("SELECT trading_date,ts_utc,ts_ist,equity,daily_start_equity,drawdown5 FROM account_snapshots WHERE is_eod=1 AND trading_date <> '' ORDER BY trading_date DESC LIMIT ?",(int(limit),)).fetchall()
         return [dict(row) for row in rows]
