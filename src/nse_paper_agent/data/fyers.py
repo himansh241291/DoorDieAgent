@@ -33,13 +33,15 @@ class FyersHistoryConfig:
 
 
 class FyersHistoricalClient:
-    """Read-only FYERS v3 historical candle client for NSE cash/index data."""
+    """Read-only FYERS v3 historical candle client for NSE 5-minute data."""
 
     def __init__(self, config: FyersHistoryConfig):
         if not config.app_id.strip() or not config.access_token.strip():
             raise ValueError("FYERS app_id and access_token are required")
-        if config.max_days_per_request > 100:
-            raise ValueError("FYERS minute history requests must not exceed 100 days")
+        if config.resolution != "5":
+            raise ValueError("DoorDieAgent FYERS ingestion currently supports only 5-minute candles")
+        if not 1 <= config.max_days_per_request <= 100:
+            raise ValueError("FYERS minute history requests must use 1..100 days per chunk")
         self.config = config
 
     def _request(self, params: dict[str, str]) -> dict:
@@ -74,7 +76,7 @@ class FyersHistoricalClient:
         if end < start:
             raise ValueError("end must be on or after start")
         if (end - start).days > self.config.max_days_per_request:
-            raise ValueError("FYERS minute history request exceeds 100-day range")
+            raise ValueError("FYERS minute history request exceeds configured chunk size")
         payload = self._request(
             {
                 "symbol": symbol,
@@ -102,7 +104,7 @@ class FyersHistoricalClient:
         out: dict[datetime, Bar] = {}
         cursor = start
         while cursor <= end:
-            chunk_end = min(cursor + timedelta(days=self.config.max_days_per_request), end)
+            chunk_end = min(cursor + timedelta(days=self.config.max_days_per_request - 1), end)
             for bar in self.fetch(symbol, cursor, chunk_end):
                 out[bar.start] = bar
             cursor = chunk_end + timedelta(days=1)
@@ -121,7 +123,9 @@ class FyersHistoricalClient:
             raise FyersDataError(f"Malformed FYERS candle for {symbol}: {candle!r}") from exc
         if min(open_price, high, low, close) <= 0:
             raise FyersDataError(f"Non-positive OHLC in FYERS candle for {symbol}: {candle!r}")
+        if high < max(open_price, close) or low > min(open_price, close) or low <= 0:
+            raise FyersDataError(f"Inconsistent OHLC in FYERS candle for {symbol}: {candle!r}")
         if volume < 0:
             raise FyersDataError(f"Negative volume in FYERS candle for {symbol}: {candle!r}")
-        end = start + timedelta(minutes=int(self_resolution_minutes := 5))
+        end = start + timedelta(minutes=5)
         return Bar(symbol, start, end, open_price, high, low, close, volume)
