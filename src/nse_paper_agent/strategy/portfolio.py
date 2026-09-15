@@ -43,7 +43,6 @@ class StrategyHealth:
     availability: StrategyAvailability = StrategyAvailability.RESEARCH
 
     def eligible_for_selection(self, regime: Regime) -> bool:
-        """Require explicit activation and valid positive evidence before selection."""
         if self.availability is not StrategyAvailability.ACTIVE:
             return False
         if self.samples <= 0 or self.expectancy is None or self.max_drawdown is None:
@@ -54,7 +53,6 @@ class StrategyHealth:
             return False
         if self.expectancy <= 0 or self.confidence <= 0:
             return False
-
         regime_exp = self.regime_expectancy.get(regime.value)
         if regime_exp is not None and (not isfinite(float(regime_exp)) or regime_exp <= 0):
             return False
@@ -88,8 +86,11 @@ class StrategyPool:
     def versions(self) -> tuple[str, ...]:
         return tuple(r.strategy.version for r in self._registrations)
 
+    def active_registrations(self) -> tuple[StrategyRegistration, ...]:
+        return tuple(r for r in self._registrations if r.availability is StrategyAvailability.ACTIVE)
+
     def active_versions(self) -> tuple[str, ...]:
-        return tuple(r.strategy.version for r in self._registrations if r.availability is StrategyAvailability.ACTIVE)
+        return tuple(r.strategy.version for r in self.active_registrations())
 
     def select(
         self,
@@ -102,10 +103,8 @@ class StrategyPool:
         eligible_versions: list[str] = []
         active_signals: list[StrategyRegistration] = []
 
-        for registration in self._registrations:
+        for registration in self.active_registrations():
             strategy = registration.strategy
-            if registration.availability is not StrategyAvailability.ACTIVE:
-                continue
             signal = signals.get(strategy.version)
             if signal is None or not signal.eligible:
                 continue
