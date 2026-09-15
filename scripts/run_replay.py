@@ -7,6 +7,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from nse_paper_agent.data.provider import load_bars_csv
+from nse_paper_agent.data.symbols import resolve_benchmark_symbol
 from nse_paper_agent.domain.models import ExitReason, Quote, Regime, RegimeSnapshot
 from nse_paper_agent.persistence.db import Database
 from nse_paper_agent.persistence.repository import Repository
@@ -59,8 +60,8 @@ def main():
     bars = load_bars_csv(args.bars)
     all_symbols = sorted({bar.symbol for bar in bars})
     cfg = build_config()
-    benchmark_symbol = cfg["market"]["benchmark"]
-    has_benchmark = benchmark_symbol in all_symbols
+    benchmark_symbol = resolve_benchmark_symbol(cfg["market"]["benchmark"], set(all_symbols))
+    has_benchmark = benchmark_symbol is not None
     symbols = [symbol for symbol in all_symbols if symbol != benchmark_symbol]
     db = Database(args.db)
     db.initialize()
@@ -128,7 +129,7 @@ def main():
         if session_state.state.value == "EOD" and session_state.is_trading_day:
             record_eod(repo, risk, now)
 
-    print({"symbols": len(all_symbols), "trading_symbols": len(symbols), "bars": len(bars), "cash": repo.cash(), "open_positions": list(repo.positions())})
+    print({"symbols": len(all_symbols), "trading_symbols": len(symbols), "benchmark_symbol": benchmark_symbol, "benchmark_resolved": has_benchmark, "bars": len(bars), "cash": repo.cash(), "open_positions": list(repo.positions())})
     db.close()
 
 
