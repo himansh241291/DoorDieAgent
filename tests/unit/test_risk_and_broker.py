@@ -46,6 +46,25 @@ def test_exit_fee_and_position_removed(tmp_path):
     db.close()
 
 
+def test_equity_marks_all_open_positions_from_full_quote_set(tmp_path):
+    db, r, b, rx = setup(tmp_path)
+    now = datetime.now(timezone.utc)
+
+    b.buy("ABC", 1, q("ABC", "100"), now, "v1")
+    b.buy("XYZ", 1, q("XYZ", "200"), now, "v1")
+
+    quotes = {
+        "ABC": q("ABC", "90"),
+        "XYZ": q("XYZ", "180"),
+    }
+    expected = r.cash() + 90.0 + 180.0
+
+    assert rx.equity(quotes) == pytest.approx(expected)
+    assert rx.equity({"ABC": quotes["ABC"]}) == pytest.approx(r.cash() + 90.0 + 200.10)
+
+    db.close()
+
+
 def test_daily_loss_blocks(tmp_path):
     db, r, _, rx = setup(tmp_path)
     assert rx.daily_loss_blocked(datetime.now(timezone.utc), 49000)
