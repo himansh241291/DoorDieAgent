@@ -50,11 +50,20 @@ def test_negative_expectancy_has_zero_selection_confidence():
 
 
 def test_regime_expectancy_is_separated():
-    engine = StrategyHealthEngine(StrategyHealthPolicy(min_samples=2))
+    engine = StrategyHealthEngine(StrategyHealthPolicy(min_samples=2, min_regime_samples=2))
     data = outcomes("a", [10, 20], "RISK_ON") + outcomes("a", [-5, -15], "CAUTIOUS")
     result = engine.compute(data, ["a"], Regime.RISK_ON)
     assert result["a"].regime_expectancy["RISK_ON"] == 15
     assert result["a"].regime_expectancy["CAUTIOUS"] == -10
+
+
+def test_weak_regime_evidence_is_not_used_for_selection():
+    engine = StrategyHealthEngine(StrategyHealthPolicy(min_samples=3, min_regime_samples=2))
+    data = outcomes("a", [10, 20], "RISK_ON") + outcomes("a", [100], "CAUTIOUS")
+    result = engine.compute(data, ["a"])
+    assert result["a"].samples == 3
+    assert "RISK_ON" in result["a"].regime_expectancy
+    assert "CAUTIOUS" not in result["a"].regime_expectancy
 
 
 def test_large_drawdown_pauses_strategy():
