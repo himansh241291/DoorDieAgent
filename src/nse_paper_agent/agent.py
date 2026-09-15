@@ -7,7 +7,7 @@ from nse_paper_agent.domain.models import ExitReason
 from nse_paper_agent.monitoring.logging import event
 from nse_paper_agent.regime.intelligence import MarketIntelligence
 from nse_paper_agent.sentiment.policy import SentimentPolicy
-from nse_paper_agent.strategy.portfolio import StrategyHealth, StrategyPool
+from nse_paper_agent.strategy.portfolio import StrategyPool
 
 
 class TradingAgent:
@@ -47,17 +47,7 @@ class TradingAgent:
         self.provider.connect()
         now = self.clock()
         daily_start = self.session.ensure_daily_state(self.repo, now, self.cfg["account"]["starting_capital"])
-        event(
-            self.log,
-            logging.INFO,
-            "startup",
-            mode="paper",
-            positions=list(self.repo.positions()),
-            session_state=self.session.state(now).value,
-            trading_date=self.session.current_trading_date(now).isoformat() if self.session.current_trading_date(now) else None,
-            daily_start_equity=daily_start,
-            strategy_pool=self.strategy_pool.versions(),
-        )
+        event(self.log, logging.INFO, "startup", mode="paper", positions=list(self.repo.positions()), session_state=self.session.state(now).value, trading_date=self.session.current_trading_date(now).isoformat() if self.session.current_trading_date(now) else None, daily_start_equity=daily_start, strategy_pool=self.strategy_pool.versions())
 
     def shutdown(self):
         self.provider.disconnect()
@@ -75,51 +65,20 @@ class TradingAgent:
         benchmark_bars = self.provider.completed_bars(benchmark_symbol, interval, now)
         bars_by_symbol = {symbol: self.provider.completed_bars(symbol, interval, now) for symbol in symbols}
         metrics = self.intelligence.calculate(benchmark_bars, bars_by_symbol)
-        required = (
-            metrics.get("close"),
-            metrics.get("sma20"),
-            metrics.get("sma50"),
-            metrics.get("breadth20"),
-            metrics.get("vol_percentile"),
-            metrics.get("vol_shock"),
-        )
+        required = (metrics.get("close"), metrics.get("sma20"), metrics.get("sma50"), metrics.get("breadth20"), metrics.get("vol_percentile"), metrics.get("vol_shock"))
         regime = self.regime_engine.classify(now, *required, self.provider.healthy(now)[0])
         return regime, metrics, benchmark_bars, bars_by_symbol
 
-    def _evaluate_pool(self, bars, ist, regime, sentiment_score, symbol, liquid, feed_healthy):
+    def _evaluate_strategies(self, bars, now_ist, regime, sentiment_score, symbol, liquid, feed_healthy):
         signals = {}
         held = symbol in self.repo.positions()
-        cooldown = self.repo.in_cooldown(symbol, ist)
-        for registration_version in self.strategy_pool.active_versions():
-            registration = next(r for r in self.strategy_pool._registrations if r.strategy.version == registration_version)
-            signal = registration.strategy.evaluate(
-                bars,
-                ist,
-                regime,
-                sentiment_score,
-                held,
-                cooldown,
-                liquid,
-                feed_healthy,
-            )
+        cooldown = self.repo.in_cooldown(symbol, now_ist)
+        for registration in self.strategy_pool.active_registrations():
+            signal = registration.strategy.evaluate(bars, now_ist, regime, sentiment_score, held, cooldown, liquid, feed_healthy)
             signals[signal.strategy_version] = signal
             self.repo.record_signal(signal, f"{signal.strategy_version}:{symbol}:{signal.bar_end.isoformat()}")
-        selection = self.strategy_pool.select(
-            signals,
-            regime,
-            {},
-            allow_single_active_bootstrap=self._bootstrap_single_strategy,
-        )
-        event(
-            self.log,
-            logging.INFO,
-            "strategy_selection",
-            symbol=symbol,
-            regime=regime.value,
-            selected=selection.strategy.version if selection.strategy else None,
-            reason=selection.reason,
-            ranked_versions=selection.ranked_versions,
-        )
+        selection = self.strategy_pool.select(signals, regime, {}, allow_single_active_bootstrap=self._bootstrap_single_strategy)
+        event(self.log, logging.INFO, "strategy_selection", symbol=symbol, regime=regime.value, selected=selection.strategy.version if selection.strategy else None, reason=selection.reason, ranked_versions=selection.ranked_versions)
         return selection, signals
 
     def cycle(self, symbols: list[str]):
@@ -129,16 +88,7 @@ class TradingAgent:
         ist = now.astimezone(self.session.timezone)
         session = self.session.snapshot(now)
         self.session.ensure_daily_state(self.repo, now, self.cfg["account"]["starting_capital"])
-        event(
-            self.log,
-            logging.INFO,
-            "session_state",
-            ts_ist=ist.isoformat(),
-            trading_date=session.trading_date.isoformat() if session.is_trading_day else None,
-            state=session.state.value,
-            entries_allowed=session.entries_allowed,
-            exits_allowed=session.exits_allowed,
-        )
+        event(self.log, logging.INFO, "session_state", ts_ist=ist.isoformat(), trading_date=session.trading_date.isoformat() if session.is_trading_day else None, state=session.state.value, entries_allowed=session.entries_allowed, exits_allowed=session.exits_allowed)
         if not session.exits_allowed:
             event(self.log, logging.INFO, "market_session_closed", ts_ist=ist.isoformat(), state=session.state.value)
             return
@@ -228,14 +178,13 @@ class TradingAgent:
 
             allowed, sentiment_factor, sentiment_reason, sentiment_score = self.sentiment_policy.entry(symbol_sentiments[symbol], now)
             if not allowed:
-                for registration_version in self.strategy_pool.active_versions():
-                    registration = next(r for r in self.strategy_pool._registrations if r.strategy.version == registration_version)
+                for registration in self.strategy_pool.active_registrations():
                     signal = registration.strategy.evaluate(bars, ist, regime.regime, sentiment_score, symbol in self.repo.positions(), self.repo.in_cooldown(symbol, now), True, qok)
                     self.repo.record_signal(signal, f"{signal.strategy_version}:{symbol}:{signal.bar_end.isoformat()}")
                 self.repo.record_risk(now, "SENTIMENT_GATE", False, sentiment_reason, {"symbol": symbol, "sentiment_score": sentiment_score})
                 continue
 
-            selection, signals = self._evaluate_pool(bars, ist, regime.regime, sentiment_score, symbol, True, qok)
+            selection, signals = self._evaluate_strategies(bars, ist, regime.regime, sentiment_score, symbol, True, qok)
             if selection.strategy is None:
                 continue
             signal = signals.get(selection.strategy.version)
