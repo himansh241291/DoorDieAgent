@@ -7,11 +7,12 @@ from nse_paper_agent.domain.models import ExitReason
 from nse_paper_agent.monitoring.logging import event
 from nse_paper_agent.regime.intelligence import MarketIntelligence
 from nse_paper_agent.sentiment.policy import SentimentPolicy
-from nse_paper_agent.strategy.portfolio import StrategyAvailability, StrategyPool, StrategyRegistration
+from nse_paper_agent.strategy.health import StrategyHealthEngine
+from nse_paper_agent.strategy.portfolio import StrategyPool, StrategyRegistration
 
 
 class TradingAgent:
-    def __init__(self, cfg, provider, repo, broker, risk, health, strategy, regime_engine, sentiment, session, notifier, clock, strategy_pool=None):
+    def __init__(self, cfg, provider, repo, broker, risk, health, strategy, regime_engine, sentiment, session, notifier, clock, strategy_pool=None, strategy_health_engine=None):
         self.cfg = cfg
         self.provider = provider
         self.repo = repo
@@ -26,8 +27,9 @@ class TradingAgent:
         self.clock = clock
         self.log = logging.getLogger("agent")
         self.strategy_pool = strategy_pool or StrategyPool([
-            StrategyRegistration(strategy=strategy, availability=StrategyAvailability.ACTIVE)
+            StrategyRegistration(strategy=strategy)
         ])
+        self.strategy_health_engine = strategy_health_engine or StrategyHealthEngine()
         self._bootstrap_single_strategy = len(self.strategy_pool.active_versions()) == 1
 
         market_cfg = cfg.get("market", {})
@@ -71,7 +73,29 @@ class TradingAgent:
         regime = self.regime_engine.classify(now, *required, self.provider.healthy(now)[0])
         return regime, metrics, benchmark_bars, bars_by_symbol
 
-    def _evaluate_strategies(self, bars, now_ist, regime, sentiment_score, symbol, liquid, feed_healthy):
+    def _strategy_health(self, now):
+        active_versions = self.strategy_pool.active_versions()
+        outcomes = self.repo.strategy_outcomes()
+        health = self.strategy_health_engine.compute(outcomes, active_versions)
+        for version, record in health.items():
+            self.repo.record_strategy_metric(
+                version,
+                now,
+                {
+                    "samples": record.samples,
+                    "expectancy": record.expectancy,
+                    "recent_expectancy": record.recent_expectancy,
+                    "max_drawdown": record.max_drawdown,
+                    "confidence": record.confidence,
+                    "selection_ready": record.selection_ready,
+                    "availability": record.availability.value,
+                    "reason": record.reason,
+                    "regime_expectancy": dict(record.regime_expectancy),
+                },
+            )
+        return health
+
+    def _evaluate_strategies(self, bars, now_ist, regime, sentiment_score, symbol, liquid, feed_healthy, health):
         signals = {}
         held = symbol in self.repo.positions()
         cooldown = self.repo.in_cooldown(symbol, now_ist)
@@ -79,8 +103,22 @@ class TradingAgent:
             signal = registration.strategy.evaluate(bars, now_ist, regime, sentiment_score, held, cooldown, liquid, feed_healthy)
             signals[signal.strategy_version] = signal
             self.repo.record_signal(signal, f"{signal.strategy_version}:{symbol}:{signal.bar_end.isoformat()}")
-        selection = self.strategy_pool.select(signals, regime, {}, allow_single_active_bootstrap=self._bootstrap_single_strategy)
-        event(self.log, logging.INFO, "strategy_selection", symbol=symbol, regime=regime.value, selected=selection.strategy.version if selection.strategy else None, reason=selection.reason, ranked_versions=selection.ranked_versions)
+        selection = self.strategy_pool.select(
+            signals,
+            regime,
+            health,
+            allow_single_active_bootstrap=self._bootstrap_single_strategy,
+        )
+        event(
+            self.log,
+            logging.INFO,
+            "strategy_selection",
+            symbol=symbol,
+            regime=regime.value,
+            selected=selection.strategy.version if selection.strategy else None,
+            reason=selection.reason,
+            ranked_versions=selection.ranked_versions,
+        )
         return selection, signals
 
     def cycle(self, symbols: list[str]):
@@ -160,6 +198,8 @@ class TradingAgent:
         self.repo.record_regime(regime)
         event(self.log, logging.INFO, "market_regime", regime=regime.regime.value, reason=regime.reason, metrics=metrics)
 
+        strategy_health = self._strategy_health(now)
+
         if not healthy or not session.entries_allowed:
             return
         rd = self.risk.can_buy(now, quotes, equity, regime.regime)
@@ -179,7 +219,16 @@ class TradingAgent:
                 self.repo.record_bar(b)
 
             allowed, sentiment_factor, sentiment_reason, sentiment_score = self.sentiment_policy.entry(symbol_sentiments[symbol], now)
-            selection, signals = self._evaluate_strategies(bars, ist, regime.regime, sentiment_score, symbol, True, qok)
+            selection, signals = self._evaluate_strategies(
+                bars,
+                ist,
+                regime.regime,
+                sentiment_score,
+                symbol,
+                True,
+                qok,
+                strategy_health,
+            )
             if not allowed:
                 self.repo.record_risk(now, "SENTIMENT_GATE", False, sentiment_reason, {"symbol": symbol, "sentiment_score": sentiment_score})
                 continue
