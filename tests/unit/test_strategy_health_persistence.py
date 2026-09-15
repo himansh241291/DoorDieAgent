@@ -1,17 +1,19 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from nse_paper_agent.domain.models import Regime, RegimeSnapshot
 from nse_paper_agent.persistence.db import Database
 from nse_paper_agent.persistence.repository import Repository
 
 
-def test_strategy_outcomes_include_latest_exit_regime(tmp_path):
+def test_strategy_outcomes_use_entry_regime_not_exit_regime(tmp_path):
     db = Database(str(tmp_path / "state.sqlite3"))
     db.initialize()
     repo = Repository(db)
-    ts = datetime(2026, 1, 1, 10, 0, tzinfo=timezone.utc)
+    entry = datetime(2026, 1, 1, 9, 5, tzinfo=timezone.utc)
+    exit_ts = entry + timedelta(hours=1)
 
-    repo.record_regime(RegimeSnapshot(ts, Regime.RISK_ON, {"close": 100.0}, "test"))
+    repo.record_regime(RegimeSnapshot(entry - timedelta(minutes=5), Regime.RISK_ON, {"close": 100.0}, "entry"))
+    repo.record_regime(RegimeSnapshot(entry + timedelta(minutes=25), Regime.CAUTIOUS, {"close": 101.0}, "later"))
     db.conn.execute(
         """
         INSERT INTO closed_trades
@@ -22,8 +24,8 @@ def test_strategy_outcomes_include_latest_exit_regime(tmp_path):
         """,
         (
             "ABC", 1, 100.0, 110.0, 20.0, 20.0, 10.0, 5.0,
-            (ts.replace(minute=55)).isoformat(), ts.isoformat(),
-            "strategy-a", "TARGET", 300, None, None,
+            entry.isoformat(), exit_ts.isoformat(),
+            "strategy-a", "TARGET", 3600, None, None,
         ),
     )
 
