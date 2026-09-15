@@ -13,6 +13,7 @@ from nse_paper_agent.strategy.portfolio import StrategyAvailability, StrategyHea
 @dataclass(frozen=True)
 class StrategyHealthPolicy:
     min_samples: int = 20
+    min_regime_samples: int = 10
     recent_window: int = 20
     degradation_expectancy_factor: float = 0.50
     max_drawdown_limit: float = 0.04
@@ -37,6 +38,8 @@ class StrategyHealthEngine:
         self.policy = policy or StrategyHealthPolicy()
         if self.policy.min_samples <= 0:
             raise ValueError("min_samples must be positive")
+        if self.policy.min_regime_samples <= 0:
+            raise ValueError("min_regime_samples must be positive")
         if self.policy.recent_window <= 0:
             raise ValueError("recent_window must be positive")
         if not 0 < self.policy.degradation_expectancy_factor <= 1:
@@ -97,7 +100,9 @@ class StrategyHealthEngine:
                 if row.regime:
                     by_regime.setdefault(row.regime, []).append(float(row.net_pnl))
             regime_expectancy = {
-                name: mean(values) for name, values in by_regime.items() if values
+                name: mean(values)
+                for name, values in by_regime.items()
+                if len(values) >= self.policy.min_regime_samples
             }
 
             availability = StrategyAvailability.ACTIVE
