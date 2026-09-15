@@ -30,6 +30,18 @@ class ValidationPlanner:
     and evaluation contract that a later replay runner must honor.
     """
 
+    REQUIRED_SAFETY_SCOPES = frozenset(
+        {
+            "risk_limits",
+            "hard_stop",
+            "position_limits",
+            "kill_switch",
+            "capital_rules",
+            "execution_safety",
+            "production_identity",
+        }
+    )
+
     def __init__(self, min_trading_days: int = 60):
         if min_trading_days <= 0:
             raise ValueError("min_trading_days must be positive")
@@ -52,20 +64,11 @@ class ValidationPlanner:
             raise ValueError("challenger version must differ from base version")
         if not data_window.strip():
             raise ValueError("data window is required")
-        if request.allowed_change_scope in request.forbidden_change_scope:
-            raise ValueError("allowed change scope overlaps forbidden scope")
 
         forbidden = set(request.forbidden_change_scope)
-        required = {
-            "risk_limits",
-            "hard_stop",
-            "position_limits",
-            "kill_switch",
-            "capital_rules",
-            "execution_safety",
-            "production_identity",
-        }
-        if not required.issubset(forbidden):
+        if request.allowed_change_scope in forbidden:
+            raise ValueError("allowed change scope overlaps forbidden scope")
+        if not self.REQUIRED_SAFETY_SCOPES.issubset(forbidden):
             raise ValueError("validation request does not freeze the complete safety envelope")
 
         return ValidationPlan(
