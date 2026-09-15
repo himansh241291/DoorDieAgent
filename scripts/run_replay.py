@@ -31,19 +31,18 @@ def build_config():
     }
 
 
-def snapshot(repo, risk, quotes, now):
+def snapshot(repo, risk, quotes, symbol, now):
     equity = risk.equity(quotes)
     gross = equity - repo.cash()
-    symbol = next(iter(quotes))
     trading_date = now.astimezone(__import__("zoneinfo").ZoneInfo("Asia/Kolkata")).date().isoformat()
     repo.record_account_snapshot_and_checkpoint(symbol=symbol, bar_end=now, cash=repo.cash(), equity=equity, gross=gross, daily_start_equity=repo.db.get_state("daily_start_equity", 50000.0), drawdown5=0.0, trading_date=trading_date, is_eod=False)
 
 
-def record_eod(repo, risk, now):
+def record_eod(repo, risk, now, quotes):
     trading_date = now.astimezone(__import__("zoneinfo").ZoneInfo("Asia/Kolkata")).date().isoformat()
     if repo.db.get_state("last_eod_trading_date") == trading_date:
         return False
-    equity = risk.equity({})
+    equity = risk.equity(quotes)
     gross = equity - repo.cash()
     previous = repo.eod_marks(build_config()["risk"]["rolling_drawdown_days"] - 1)
     values = [float(mark["equity"]) for mark in reversed(previous)]
@@ -77,6 +76,7 @@ def main():
     regime_engine = RegimeEngine()
     intelligence = MarketIntelligence(benchmark_min_bars=50, volatility_window=20, volatility_history=60, breadth_window=20, breadth_min_symbols=cfg["market"]["minimum_breadth_symbols"])
     history = {symbol: repo.market_bars(symbol) for symbol in all_symbols}
+    latest_quotes = {}
 
     for bar in sorted(bars, key=lambda item: item.end):
         now = bar.end
@@ -92,7 +92,7 @@ def main():
         repo.record_bar(bar)
         quote = Quote(bar.symbol, now, bar.close * Decimal("0.999"), bar.close * Decimal("1.001"), bar.close, bar.volume)
         repo.record_quote(quote)
-        quotes = {bar.symbol: quote}
+        latest_quotes[bar.symbol] = quote
         position = repo.positions().get(bar.symbol)
         if position and session_state.exits_allowed:
             if quote.bid <= position.stop_price:
@@ -118,16 +118,16 @@ def main():
             signal = strategy.evaluate(history[bar.symbol], now, regime, 0.5, bar.symbol in repo.positions(), repo.in_cooldown(bar.symbol, now), True, True)
             repo.record_signal(signal, f"replay:{signal.symbol}:{signal.bar_end.isoformat()}")
             if signal.eligible and bar.symbol not in repo.positions():
-                equity = risk.equity(quotes)
-                decision = risk.can_buy(now, quotes, equity, regime)
+                equity = risk.equity(latest_quotes)
+                decision = risk.can_buy(now, latest_quotes, equity, regime)
                 repo.record_risk(now, "ENTRY", decision.allowed, decision.reason, {"symbol": bar.symbol, "score": signal.score, "regime": regime.value})
                 if decision.allowed:
                     qty = risk.quantity(quote.ask, equity, quote, decision.size_factor)
                     if qty > 0:
                         broker.buy(bar.symbol, qty, quote, now, signal.strategy_version)
-        snapshot(repo, risk, quotes, now)
+        snapshot(repo, risk, latest_quotes, bar.symbol, now)
         if session_state.state.value == "EOD" and session_state.is_trading_day:
-            record_eod(repo, risk, now)
+            record_eod(repo, risk, now, latest_quotes)
 
     print({"symbols": len(all_symbols), "trading_symbols": len(symbols), "benchmark_symbol": benchmark_symbol, "benchmark_resolved": has_benchmark, "bars": len(bars), "cash": repo.cash(), "open_positions": list(repo.positions())})
     db.close()
