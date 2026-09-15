@@ -42,29 +42,23 @@ class StrategyHealth:
     regime_expectancy: Mapping[str, float] = field(default_factory=dict)
     availability: StrategyAvailability = StrategyAvailability.RESEARCH
 
-    def safe_score(self, regime: Regime) -> float | None:
-        """Return a bounded selection score; invalid health never becomes a buy signal."""
+    def eligible_for_selection(self, regime: Regime) -> bool:
+        """Require explicit activation and valid positive evidence before selection."""
         if self.availability is not StrategyAvailability.ACTIVE:
-            return None
+            return False
         if self.samples <= 0 or self.expectancy is None or self.max_drawdown is None:
-            return None
+            return False
         if not all(isfinite(float(x)) for x in (self.expectancy, self.max_drawdown, self.confidence)):
-            return None
+            return False
         if self.max_drawdown < 0 or self.max_drawdown >= 1:
-            return None
+            return False
         if self.expectancy <= 0 or self.confidence <= 0:
-            return None
+            return False
 
         regime_exp = self.regime_expectancy.get(regime.value)
         if regime_exp is not None and (not isfinite(float(regime_exp)) or regime_exp <= 0):
-            return None
-
-        # Health is deliberately conservative. Drawdown and low confidence reduce rank.
-        base = max(0.0, min(1.0, float(self.expectancy) / 100.0))
-        dd_factor = max(0.0, min(1.0, 1.0 - float(self.max_drawdown)))
-        confidence = max(0.0, min(1.0, float(self.confidence)))
-        regime_factor = 1.0 if regime_exp is None else max(0.0, min(1.0, float(regime_exp) / 100.0))
-        return base * dd_factor * confidence * regime_factor
+            return False
+        return True
 
 
 @dataclass(frozen=True)
@@ -99,7 +93,7 @@ class StrategyPool:
         regime: Regime,
         health: Mapping[str, StrategyHealth],
     ) -> StrategySelection:
-        ranked: list[tuple[float, int, str, Strategy]] = []
+        ranked: list[tuple[float, float, float, int, int, str, Strategy]] = []
         eligible_versions: list[str] = []
 
         for registration in self._registrations:
@@ -109,14 +103,24 @@ class StrategyPool:
                 continue
             if registration.allowed_regimes and regime not in registration.allowed_regimes:
                 continue
-            score = health.get(strategy.version, StrategyHealth(strategy.version)).safe_score(regime)
-            if score is None:
+            record = health.get(strategy.version, StrategyHealth(strategy.version))
+            if not record.eligible_for_selection(regime):
                 continue
             eligible_versions.append(strategy.version)
-            ranked.append((score, -registration.priority, strategy.version, strategy))
+            ranked.append(
+                (
+                    float(record.expectancy),
+                    -float(record.max_drawdown),
+                    float(record.confidence),
+                    int(record.samples),
+                    -int(registration.priority),
+                    strategy.version,
+                    strategy,
+                )
+            )
 
         if not ranked:
             return StrategySelection(None, "no_healthy_eligible_strategy", tuple(sorted(eligible_versions)))
 
-        ranked.sort(key=lambda item: (-item[0], item[1], item[2]))
-        return StrategySelection(ranked[0][3], "selected_by_strategy_health", tuple(item[2] for item in ranked))
+        ranked.sort(key=lambda item: (-item[0], -item[1], -item[2], -item[3], item[4], item[5]))
+        return StrategySelection(ranked[0][6], "selected_by_strategy_health", tuple(item[5] for item in ranked))
