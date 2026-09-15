@@ -23,12 +23,12 @@ def cfg():
     }
 
 
-def ist(hour, minute, day=15):
+def ist(hour, minute, day=15, month=9):
     from zoneinfo import ZoneInfo
 
     return datetime(
-        2026,
-        9,
+        2026 if month == 9 else 2025,
+        month,
         day,
         hour,
         minute,
@@ -43,6 +43,55 @@ def test_nse_calendar_weekend_and_holiday():
     assert not cal.is_trading_day(__import__("datetime").date(2026, 9, 12))
     assert not cal.is_trading_day(__import__("datetime").date(2026, 9, 13))
     assert not cal.is_trading_day(__import__("datetime").date(2026, 10, 2))
+
+
+def test_special_session_window():
+    cal = TradingCalendar(str(CALENDAR))
+    window = cal.session_window(
+        __import__("datetime").date(2025, 10, 21),
+        __import__("datetime").time(9, 15),
+        __import__("datetime").time(15, 30),
+    )
+
+    assert window is not None
+    assert window.open == __import__("datetime").time(13, 45)
+    assert window.close == __import__("datetime").time(14, 45)
+
+
+def test_regular_bar_start_normal_session():
+    s = SessionGuard(cfg())
+
+    assert s.regular_bar_start(ist(9, 15))
+    assert s.regular_bar_start(ist(15, 25))
+    assert not s.regular_bar_start(ist(9, 10))
+    assert not s.regular_bar_start(ist(15, 30))
+
+
+def test_regular_bar_start_rejects_pre_open_records():
+    s = SessionGuard(cfg())
+
+    assert not s.regular_bar_start(ist(9, 5, day=9))
+    assert not s.regular_bar_start(ist(9, 10, day=9))
+
+
+def test_regular_bar_start_uses_muhurat_window():
+    s = SessionGuard(cfg())
+
+    dt = datetime(2025, 10, 21, 13, 45, tzinfo=__import__("zoneinfo").ZoneInfo("Asia/Kolkata"))
+
+    assert s.regular_bar_start(dt)
+    assert not s.regular_bar_start(dt.replace(hour=13, minute=40))
+    assert not s.regular_bar_start(dt.replace(hour=14, minute=45))
+
+
+def test_special_session_state():
+    s = SessionGuard(cfg())
+    tz = __import__("zoneinfo").ZoneInfo("Asia/Kolkata")
+
+    assert s.state(datetime(2025, 10, 21, 13, 44, tzinfo=tz)) == SessionState.PRE_OPEN
+    assert s.state(datetime(2025, 10, 21, 13, 45, tzinfo=tz)) == SessionState.OPEN
+    assert s.state(datetime(2025, 10, 21, 14, 44, tzinfo=tz)) == SessionState.ENTRY_CUTOFF
+    assert s.state(datetime(2025, 10, 21, 14, 45, tzinfo=tz)) == SessionState.EOD
 
 
 def test_session_before_pre_open_is_closed():
