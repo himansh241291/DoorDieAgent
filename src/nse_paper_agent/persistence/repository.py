@@ -68,6 +68,44 @@ class Repository:
     def set_checkpoint(self,symbol,bar_end):
         self.db.set_state(f"checkpoint:{symbol}",iso(bar_end))
 
+    def strategy_outcomes(self):
+        from nse_paper_agent.strategy.health import StrategyOutcome
+        rows = self.db.conn.execute(
+            """
+            SELECT c.strategy_version, c.net_pnl, c.exit_ts_utc,
+                   (
+                       SELECT mr.regime
+                       FROM market_regimes mr
+                       WHERE mr.ts_utc <= c.exit_ts_utc
+                       ORDER BY mr.ts_utc DESC, mr.id DESC
+                       LIMIT 1
+                   ) AS regime
+            FROM closed_trades c
+            ORDER BY c.exit_ts_utc, c.id
+            """
+        ).fetchall()
+        from datetime import datetime
+        return [
+            StrategyOutcome(
+                version=row["strategy_version"],
+                net_pnl=float(row["net_pnl"]),
+                exit_ts=datetime.fromisoformat(row["exit_ts_utc"]),
+                regime=row["regime"],
+            )
+            for row in rows
+        ]
+
+    def record_strategy_metric(self, version, computed_ts, metrics, regime=None):
+        self.db.conn.execute(
+            "INSERT INTO strategy_metrics(version,regime,computed_ts_utc,metrics_json) VALUES(?,?,?,?)",
+            (
+                str(version),
+                regime.value if hasattr(regime, "value") else regime,
+                iso(computed_ts),
+                json.dumps(metrics, default=str, sort_keys=True),
+            ),
+        )
+
     def record_account_snapshot_and_checkpoint(
         self,
         symbol,
@@ -127,12 +165,6 @@ class Repository:
         daily_start_equity,
         drawdown5,
     ):
-        """
-        Persist exactly one completed EOD equity mark per trading date.
-
-        The partial unique index on (trading_date) for is_eod=1 makes
-        repeated EOD processing idempotent at the database layer.
-        """
         with self.db.transaction():
             cursor = self.db.conn.execute(
                 """
@@ -162,25 +194,11 @@ class Repository:
                 ),
             )
 
-            # Only the first successful EOD insertion can advance the
-            # completed-day state. Repeated processing is therefore
-            # idempotent and cannot overwrite the authoritative mark.
             if cursor.rowcount == 1:
-                self.db.set_state(
-                    "last_eod_trading_date",
-                    str(trading_date),
-                )
-                self.db.set_state(
-                    "last_eod_equity",
-                    float(equity),
-                )
-                self.db.set_state(
-                    "last_eod_ts_utc",
-                    iso(ts),
-                )
-
+                self.db.set_state("last_eod_trading_date", str(trading_date))
+                self.db.set_state("last_eod_equity", float(equity))
+                self.db.set_state("last_eod_ts_utc", iso(ts))
                 return True
-
             return False
 
     def eod_marks(self, limit=5):
