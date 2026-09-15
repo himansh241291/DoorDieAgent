@@ -102,6 +102,7 @@ class StrategyPool:
         ranked: list[tuple[float, float, float, int, int, str, Strategy]] = []
         eligible_versions: list[str] = []
         active_signals: list[StrategyRegistration] = []
+        unassessed_active: list[StrategyRegistration] = []
 
         for registration in self.active_registrations():
             strategy = registration.strategy
@@ -111,7 +112,10 @@ class StrategyPool:
             if registration.allowed_regimes and regime not in registration.allowed_regimes:
                 continue
             active_signals.append(registration)
-            record = health.get(strategy.version, StrategyHealth(strategy.version))
+            record = health.get(strategy.version)
+            if record is None:
+                unassessed_active.append(registration)
+                continue
             if not record.eligible_for_selection(regime):
                 continue
             eligible_versions.append(strategy.version)
@@ -131,7 +135,10 @@ class StrategyPool:
             ranked.sort(key=lambda item: (-item[0], -item[1], -item[2], -item[3], item[4], item[5]))
             return StrategySelection(ranked[0][6], "selected_by_strategy_health", tuple(item[5] for item in ranked))
 
-        if allow_single_active_bootstrap and len(active_signals) == 1:
+        # Bootstrap is allowed only when the strategy has no health record yet.
+        # An explicit health record, including PAUSED/invalid/degraded evidence,
+        # must never be bypassed by the bootstrap path.
+        if allow_single_active_bootstrap and len(active_signals) == 1 and len(unassessed_active) == 1:
             strategy = active_signals[0].strategy
             return StrategySelection(strategy, "single_active_strategy_bootstrap", (strategy.version,))
 
