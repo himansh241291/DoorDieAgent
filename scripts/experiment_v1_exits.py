@@ -7,10 +7,11 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
-from statistics import mean, median
+from statistics import median
 from typing import Iterable
+from zoneinfo import ZoneInfo
 
-
+IST = ZoneInfo("Asia/Kolkata")
 SLIPPAGE_BPS = Decimal("10")
 BUY_FEE = Decimal("20")
 SELL_FEE = Decimal("20")
@@ -91,25 +92,29 @@ def close_at_bar(entry: Entry, bar: Bar, reason: str) -> Result:
     return Result(exit_price, gross, net, bar.end, reason)
 
 
-def first_bar_at_or_after(bars: list[Bar], timestamp: datetime) -> Bar | None:
-    for bar in bars:
-        if bar.end >= timestamp:
-            return bar
-    return None
+def same_session_bars(entry: Entry, bars: list[Bar]) -> list[Bar]:
+    entry_date = entry.ts.astimezone(IST).date()
+    return [
+        bar
+        for bar in bars
+        if bar.end > entry.ts and bar.end.astimezone(IST).date() == entry_date
+    ]
 
 
 def simulate_time_exit(entry: Entry, bars: list[Bar], minutes: int) -> Result | None:
-    bar = first_bar_at_or_after(bars, entry.ts + timedelta(minutes=minutes))
+    future = same_session_bars(entry, bars)
+    cutoff = entry.ts + timedelta(minutes=minutes)
+    bar = next((item for item in future if item.end >= cutoff), None)
     return close_at_bar(entry, bar, f"TIME_{minutes}M") if bar else None
 
 
 def simulate_bracket(entry: Entry, bars: list[Bar], stop_pct: float, target_pct: float) -> Result | None:
     stop = entry.price * (Decimal("1") - Decimal(str(stop_pct)) / Decimal("100"))
     target = entry.price * (Decimal("1") + Decimal(str(target_pct)) / Decimal("100"))
-    future = [bar for bar in bars if bar.end > entry.ts]
+    future = same_session_bars(entry, bars)
     for bar in future:
-        # With only OHLC data we do not know intrabar path. Conservative ordering:
-        # if both stop and target are touched in the same candle, assume the stop wins.
+        # OHLC does not reveal intrabar path. Conservative assumption: stop first
+        # whenever both thresholds are touched in the same 5-minute candle.
         if bar.low <= stop:
             exit_price = sell_price(stop)
             gross = (exit_price - entry.price) * entry.qty
@@ -118,19 +123,18 @@ def simulate_bracket(entry: Entry, bars: list[Bar], stop_pct: float, target_pct:
             exit_price = sell_price(target)
             gross = (exit_price - entry.price) * entry.qty
             return Result(exit_price, gross, gross - BUY_FEE - SELL_FEE, bar.end, f"TARGET_{target_pct:.2f}PCT")
-    # No bracket hit: use EOD close as the deterministic fallback.
+
     eod = future[-1] if future else None
     return close_at_bar(entry, eod, "EOD_FALLBACK") if eod else None
 
 
 def summarize(label: str, results: Iterable[Result], entries: int) -> None:
     rows = list(results)
-    pnls = [float(r.net_pnl) for r in rows]
-    gross = sum(float(r.gross_pnl) for r in rows)
+    pnls = [float(result.net_pnl) for result in rows]
+    gross = sum(float(result.gross_pnl) for result in rows)
     net = sum(pnls)
     wins = sum(value > 0 for value in pnls)
     losses = sum(value <= 0 for value in pnls)
-    holding = [(r.exit_ts - e.ts).total_seconds() / 60 for r, e in zip(rows, [])]
     print(
         label,
         {
@@ -166,6 +170,7 @@ def main() -> None:
     print("EXPERIMENT=V1_FIXED_ENTRY_EXIT_RESEARCH")
     print("WARNING=entry events are held fixed; portfolio capacity/risk interactions are intentionally not re-simulated")
     print("WARNING=bracket experiments use OHLC path ambiguity with conservative STOP-first ordering")
+    print("WARNING=time exits and EOD fallback remain within the same IST trading session")
     print(f"entries={len(entries)}")
 
     for minutes in TIME_EXITS_MINUTES:
