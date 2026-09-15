@@ -26,14 +26,16 @@ def signal(version: str, eligible: bool = True) -> Signal:
     )
 
 
-def health(version: str, expectancy: float, confidence: float = 1.0) -> StrategyHealth:
+def health(version: str, expectancy: float, confidence: float = 1.0, selection_ready: bool = True) -> StrategyHealth:
     return StrategyHealth(
         version=version,
         samples=50,
         expectancy=expectancy,
+        recent_expectancy=expectancy,
         max_drawdown=0.02,
         confidence=confidence,
         availability=StrategyAvailability.ACTIVE,
+        selection_ready=selection_ready,
     )
 
 
@@ -85,6 +87,58 @@ def test_single_active_bootstrap_is_explicit():
     assert selected.strategy is strategy
     assert selected.reason == "single_active_strategy_bootstrap"
     assert selected.ranked_versions == ("strategy-a",)
+
+
+def test_single_active_bootstrap_allows_insufficient_evidence_but_not_pause():
+    strategy = DummyStrategy("strategy-a")
+    pool = StrategyPool([StrategyRegistration(strategy)])
+    selected = pool.select(
+        {"strategy-a": signal("strategy-a")},
+        Regime.RISK_ON,
+        {"strategy-a": health("strategy-a", 10, selection_ready=False)},
+        allow_single_active_bootstrap=True,
+    )
+    assert selected.strategy is strategy
+    assert selected.reason == "single_active_strategy_bootstrap"
+
+
+def test_bootstrap_does_not_bypass_paused_health():
+    strategy = DummyStrategy("strategy-a")
+    pool = StrategyPool([StrategyRegistration(strategy)])
+    paused = StrategyHealth(
+        version="strategy-a",
+        samples=20,
+        expectancy=10,
+        recent_expectancy=-20,
+        max_drawdown=0.05,
+        confidence=0.5,
+        availability=StrategyAvailability.PAUSED,
+        selection_ready=False,
+        reason="drawdown_limit_exceeded",
+    )
+    selected = pool.select(
+        {"strategy-a": signal("strategy-a")},
+        Regime.RISK_ON,
+        {"strategy-a": paused},
+        allow_single_active_bootstrap=True,
+    )
+    assert selected.strategy is None
+
+
+def test_two_active_strategies_require_evidence_before_selection():
+    a = DummyStrategy("strategy-a")
+    b = DummyStrategy("strategy-b")
+    pool = StrategyPool([StrategyRegistration(a), StrategyRegistration(b)])
+    selected = pool.select(
+        {"strategy-a": signal("strategy-a"), "strategy-b": signal("strategy-b")},
+        Regime.RISK_ON,
+        {
+            "strategy-a": health("strategy-a", 10, selection_ready=False),
+            "strategy-b": health("strategy-b", 20, selection_ready=False),
+        },
+        allow_single_active_bootstrap=True,
+    )
+    assert selected.strategy is None
 
 
 def test_bootstrap_does_not_select_when_signal_is_ineligible():
@@ -146,6 +200,7 @@ def test_nonfinite_health_fails_closed():
         max_drawdown=0.02,
         confidence=1.0,
         availability=StrategyAvailability.ACTIVE,
+        selection_ready=True,
     )
     selected = pool.select(
         {"strategy-a": signal("strategy-a")}, Regime.RISK_ON, {"strategy-a": bad}
