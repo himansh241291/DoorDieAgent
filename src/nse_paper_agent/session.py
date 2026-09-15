@@ -54,6 +54,21 @@ class SessionGuard:
     def trading_day(self, d: date) -> bool:
         return self.calendar.is_trading_day(d)
 
+    def session_window(self, d: date):
+        return self.calendar.session_window(d, self.open, self.close)
+
+    def regular_bar_start(self, ts: datetime) -> bool:
+        """Return whether a timestamp can be a regular-market 5-minute bar start."""
+        if ts.tzinfo is None:
+            raise ValueError("bar timestamp must be timezone-aware")
+
+        ist = ts.astimezone(self.timezone)
+        window = self.session_window(ist.date())
+        if window is None:
+            return False
+
+        return window.open <= ist.time() < window.close
+
     def state(self, now: datetime) -> SessionState:
         """
         Return the authoritative session state for an aware timestamp.
@@ -70,17 +85,19 @@ class SessionGuard:
             return SessionState.CLOSED
 
         t = ist.time()
+        window = self.session_window(d)
+        assert window is not None
 
-        if t < self.pre_open:
-            return SessionState.CLOSED
-
-        if t < self.open:
+        if t < window.open:
+            if t < self.pre_open:
+                return SessionState.CLOSED
             return SessionState.PRE_OPEN
 
-        if t < self.entry_cutoff:
+        cutoff = min(self.entry_cutoff, window.close)
+        if t < cutoff:
             return SessionState.OPEN
 
-        if t < self.close:
+        if t < window.close:
             return SessionState.ENTRY_CUTOFF
 
         # From the official continuous-session close until midnight,
