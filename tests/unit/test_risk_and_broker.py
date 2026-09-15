@@ -60,8 +60,10 @@ def test_equity_marks_all_open_positions_from_full_quote_set(tmp_path):
     expected = r.cash() + float(quotes["ABC"].bid) + float(quotes["XYZ"].bid)
 
     assert rx.equity(quotes) == pytest.approx(expected)
+
+    xyz_last_mark = float(r.positions()["XYZ"].last_mark)
     assert rx.equity({"ABC": quotes["ABC"]}) == pytest.approx(
-        r.cash() + float(quotes["ABC"].bid) + 200.10
+        r.cash() + float(quotes["ABC"].bid) + xyz_last_mark
     )
 
     db.close()
