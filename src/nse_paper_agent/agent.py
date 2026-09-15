@@ -7,7 +7,7 @@ from nse_paper_agent.domain.models import ExitReason
 from nse_paper_agent.monitoring.logging import event
 from nse_paper_agent.regime.intelligence import MarketIntelligence
 from nse_paper_agent.sentiment.policy import SentimentPolicy
-from nse_paper_agent.strategy.portfolio import StrategyPool
+from nse_paper_agent.strategy.portfolio import StrategyAvailability, StrategyPool, StrategyRegistration
 
 
 class TradingAgent:
@@ -25,8 +25,10 @@ class TradingAgent:
         self.notifier = notifier
         self.clock = clock
         self.log = logging.getLogger("agent")
-        self.strategy_pool = strategy_pool or StrategyPool([])
-        self._bootstrap_single_strategy = strategy_pool is not None and len(self.strategy_pool.active_versions()) == 1
+        self.strategy_pool = strategy_pool or StrategyPool([
+            StrategyRegistration(strategy=strategy, availability=StrategyAvailability.ACTIVE)
+        ])
+        self._bootstrap_single_strategy = len(self.strategy_pool.active_versions()) == 1
 
         market_cfg = cfg.get("market", {})
         self.intelligence = MarketIntelligence(
@@ -177,14 +179,10 @@ class TradingAgent:
                 self.repo.record_bar(b)
 
             allowed, sentiment_factor, sentiment_reason, sentiment_score = self.sentiment_policy.entry(symbol_sentiments[symbol], now)
+            selection, signals = self._evaluate_strategies(bars, ist, regime.regime, sentiment_score, symbol, True, qok)
             if not allowed:
-                for registration in self.strategy_pool.active_registrations():
-                    signal = registration.strategy.evaluate(bars, ist, regime.regime, sentiment_score, symbol in self.repo.positions(), self.repo.in_cooldown(symbol, now), True, qok)
-                    self.repo.record_signal(signal, f"{signal.strategy_version}:{symbol}:{signal.bar_end.isoformat()}")
                 self.repo.record_risk(now, "SENTIMENT_GATE", False, sentiment_reason, {"symbol": symbol, "sentiment_score": sentiment_score})
                 continue
-
-            selection, signals = self._evaluate_strategies(bars, ist, regime.regime, sentiment_score, symbol, True, qok)
             if selection.strategy is None:
                 continue
             signal = signals.get(selection.strategy.version)
