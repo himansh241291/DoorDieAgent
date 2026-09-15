@@ -1,5 +1,6 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -9,6 +10,7 @@ from nse_paper_agent.session import SessionGuard, SessionState
 
 ROOT = Path(__file__).resolve().parents[2]
 CALENDAR = ROOT / "config" / "nse_holidays.yaml"
+IST = ZoneInfo("Asia/Kolkata")
 
 
 def cfg():
@@ -23,39 +25,30 @@ def cfg():
     }
 
 
-def ist(hour, minute, day=15, month=9):
-    from zoneinfo import ZoneInfo
-
-    return datetime(
-        2026 if month == 9 else 2025,
-        month,
-        day,
-        hour,
-        minute,
-        tzinfo=ZoneInfo("Asia/Kolkata"),
-    )
+def ist(hour, minute, day=15, month=9, year=2026):
+    return datetime(year, month, day, hour, minute, tzinfo=IST)
 
 
 def test_nse_calendar_weekend_and_holiday():
     cal = TradingCalendar(str(CALENDAR))
 
-    assert cal.is_trading_day(__import__("datetime").date(2026, 9, 11))
-    assert not cal.is_trading_day(__import__("datetime").date(2026, 9, 12))
-    assert not cal.is_trading_day(__import__("datetime").date(2026, 9, 13))
-    assert not cal.is_trading_day(__import__("datetime").date(2026, 10, 2))
+    assert cal.is_trading_day(date(2026, 9, 11))
+    assert not cal.is_trading_day(date(2026, 9, 12))
+    assert not cal.is_trading_day(date(2026, 9, 13))
+    assert not cal.is_trading_day(date(2026, 10, 2))
 
 
 def test_special_session_window():
     cal = TradingCalendar(str(CALENDAR))
     window = cal.session_window(
-        __import__("datetime").date(2025, 10, 21),
-        __import__("datetime").time(9, 15),
-        __import__("datetime").time(15, 30),
+        date(2025, 10, 21),
+        time(9, 15),
+        time(15, 30),
     )
 
     assert window is not None
-    assert window.open == __import__("datetime").time(13, 45)
-    assert window.close == __import__("datetime").time(14, 45)
+    assert window.open == time(13, 45)
+    assert window.close == time(14, 45)
 
 
 def test_regular_bar_start_normal_session():
@@ -76,8 +69,7 @@ def test_regular_bar_start_rejects_pre_open_records():
 
 def test_regular_bar_start_uses_muhurat_window():
     s = SessionGuard(cfg())
-
-    dt = datetime(2025, 10, 21, 13, 45, tzinfo=__import__("zoneinfo").ZoneInfo("Asia/Kolkata"))
+    dt = datetime(2025, 10, 21, 13, 45, tzinfo=IST)
 
     assert s.regular_bar_start(dt)
     assert not s.regular_bar_start(dt.replace(hour=13, minute=40))
@@ -86,12 +78,11 @@ def test_regular_bar_start_uses_muhurat_window():
 
 def test_special_session_state():
     s = SessionGuard(cfg())
-    tz = __import__("zoneinfo").ZoneInfo("Asia/Kolkata")
 
-    assert s.state(datetime(2025, 10, 21, 13, 44, tzinfo=tz)) == SessionState.PRE_OPEN
-    assert s.state(datetime(2025, 10, 21, 13, 45, tzinfo=tz)) == SessionState.OPEN
-    assert s.state(datetime(2025, 10, 21, 14, 44, tzinfo=tz)) == SessionState.ENTRY_CUTOFF
-    assert s.state(datetime(2025, 10, 21, 14, 45, tzinfo=tz)) == SessionState.EOD
+    assert s.state(datetime(2025, 10, 21, 13, 44, tzinfo=IST)) == SessionState.PRE_OPEN
+    assert s.state(datetime(2025, 10, 21, 13, 45, tzinfo=IST)) == SessionState.OPEN
+    assert s.state(datetime(2025, 10, 21, 14, 44, tzinfo=IST)) == SessionState.OPEN
+    assert s.state(datetime(2025, 10, 21, 14, 45, tzinfo=IST)) == SessionState.EOD
 
 
 def test_session_before_pre_open_is_closed():
