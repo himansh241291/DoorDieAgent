@@ -63,7 +63,7 @@ def test_unhealthy_strategy_cannot_be_selected():
     assert selected.reason == "no_healthy_eligible_strategy"
 
 
-def test_missing_health_fails_closed():
+def test_missing_health_fails_closed_without_bootstrap():
     strategy = DummyStrategy("strategy-a")
     pool = StrategyPool([StrategyRegistration(strategy)])
     selected = pool.select(
@@ -71,6 +71,32 @@ def test_missing_health_fails_closed():
     )
     assert selected.strategy is None
     assert selected.reason == "no_healthy_eligible_strategy"
+
+
+def test_single_active_bootstrap_is_explicit():
+    strategy = DummyStrategy("strategy-a")
+    pool = StrategyPool([StrategyRegistration(strategy)])
+    selected = pool.select(
+        {"strategy-a": signal("strategy-a")},
+        Regime.RISK_ON,
+        {},
+        allow_single_active_bootstrap=True,
+    )
+    assert selected.strategy is strategy
+    assert selected.reason == "single_active_strategy_bootstrap"
+    assert selected.ranked_versions == ("strategy-a",)
+
+
+def test_bootstrap_does_not_select_when_signal_is_ineligible():
+    strategy = DummyStrategy("strategy-a")
+    pool = StrategyPool([StrategyRegistration(strategy)])
+    selected = pool.select(
+        {"strategy-a": signal("strategy-a", eligible=False)},
+        Regime.RISK_ON,
+        {},
+        allow_single_active_bootstrap=True,
+    )
+    assert selected.strategy is None
 
 
 def test_regime_restriction_is_enforced():
@@ -82,6 +108,20 @@ def test_regime_restriction_is_enforced():
         {"strategy-a": signal("strategy-a")},
         Regime.CAUTIOUS,
         {"strategy-a": health("strategy-a", 50)},
+    )
+    assert selected.strategy is None
+
+
+def test_inactive_strategy_is_not_selectable_even_with_health():
+    strategy = DummyStrategy("strategy-a")
+    pool = StrategyPool([
+        StrategyRegistration(strategy, availability=StrategyAvailability.PAUSED)
+    ])
+    selected = pool.select(
+        {"strategy-a": signal("strategy-a")},
+        Regime.RISK_ON,
+        {"strategy-a": health("strategy-a", 50)},
+        allow_single_active_bootstrap=True,
     )
     assert selected.strategy is None
 
