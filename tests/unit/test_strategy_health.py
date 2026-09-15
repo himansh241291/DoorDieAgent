@@ -22,9 +22,22 @@ def test_health_requires_active_version_and_uses_completed_outcomes():
     assert set(result) == {"a", "b"}
     assert result["a"].samples == 5
     assert result["a"].expectancy == 10.4
+    assert result["a"].selection_ready
+    assert result["a"].reason == "evidence_ready"
     assert result["a"].max_drawdown >= 0
     assert result["b"].samples == 0
     assert result["b"].availability is StrategyAvailability.ACTIVE
+    assert not result["b"].selection_ready
+
+
+def test_insufficient_positive_evidence_is_not_selection_ready():
+    engine = StrategyHealthEngine(StrategyHealthPolicy(min_samples=5))
+    result = engine.compute(outcomes("a", [10, 20, 5]), ["a"])
+    health = result["a"]
+    assert health.expectancy > 0
+    assert not health.selection_ready
+    assert health.availability is StrategyAvailability.ACTIVE
+    assert health.reason == "insufficient_evidence"
 
 
 def test_negative_expectancy_has_zero_selection_confidence():
@@ -33,6 +46,7 @@ def test_negative_expectancy_has_zero_selection_confidence():
     health = result["a"]
     assert health.expectancy < 0
     assert health.confidence == 0
+    assert health.selection_ready
 
 
 def test_regime_expectancy_is_separated():
@@ -45,9 +59,10 @@ def test_regime_expectancy_is_separated():
 
 def test_large_drawdown_pauses_strategy():
     engine = StrategyHealthEngine(StrategyHealthPolicy(min_samples=5, max_drawdown_limit=0.04))
-    # A losing sequence large enough to breach the strategy health drawdown threshold.
     result = engine.compute(outcomes("a", [1000, -3000, -1000, 500, 500]), ["a"])
     assert result["a"].availability is StrategyAvailability.PAUSED
+    assert not result["a"].selection_ready
+    assert result["a"].reason == "drawdown_limit_exceeded"
 
 
 def test_recent_performance_degradation_pauses_positive_strategy():
@@ -57,6 +72,7 @@ def test_recent_performance_degradation_pauses_positive_strategy():
     result = engine.compute(outcomes("a", [100, 100, 100, -20, -20, -20]), ["a"])
     assert result["a"].expectancy > 0
     assert result["a"].availability is StrategyAvailability.PAUSED
+    assert result["a"].reason == "recent_expectancy_degradation"
 
 
 def test_nonfinite_outcomes_are_ignored():
@@ -67,3 +83,4 @@ def test_nonfinite_outcomes_are_ignored():
     result = engine.compute(data, ["a"])
     assert result["a"].samples == 2
     assert result["a"].expectancy == 15
+    assert result["a"].selection_ready
