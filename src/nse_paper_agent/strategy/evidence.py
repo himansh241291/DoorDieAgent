@@ -7,10 +7,20 @@ from statistics import mean
 from typing import Iterable, Mapping
 from zoneinfo import ZoneInfo
 
-from nse_paper_agent.strategy.health import StrategyOutcome
-
 
 IST = ZoneInfo("Asia/Kolkata")
+
+
+@dataclass(frozen=True)
+class StrategyOutcome:
+    version: str
+    net_pnl: float
+    exit_ts: datetime
+    regime: str | None = None
+    symbol: str | None = None
+    entry_ts: datetime | None = None
+    exit_reason: str | None = None
+    holding_seconds: int | None = None
 
 
 @dataclass(frozen=True)
