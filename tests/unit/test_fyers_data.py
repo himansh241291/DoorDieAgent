@@ -1,5 +1,4 @@
 from datetime import date, datetime, timedelta, timezone
-from io import BytesIO
 from unittest.mock import patch
 
 import pytest
@@ -51,6 +50,8 @@ def test_fetch_builds_documented_history_request_and_returns_bars():
     assert "range_from=2026-09-01" in request.full_url
     assert "range_to=2026-09-01" in request.full_url
     assert request.headers["Authorization"] == "APP-100:TOKEN"
+    assert request.headers["User-agent"].startswith("Mozilla/5.0")
+    assert request.headers["Accept"] == "application/json"
 
 
 def test_fetch_rejects_failed_fyers_response():
