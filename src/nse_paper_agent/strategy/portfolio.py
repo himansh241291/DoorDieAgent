@@ -66,6 +66,7 @@ class StrategyRegistration:
     strategy: Strategy
     priority: int = 100
     allowed_regimes: frozenset[Regime] = frozenset()
+    availability: StrategyAvailability = StrategyAvailability.ACTIVE
 
 
 @dataclass(frozen=True)
@@ -87,22 +88,30 @@ class StrategyPool:
     def versions(self) -> tuple[str, ...]:
         return tuple(r.strategy.version for r in self._registrations)
 
+    def active_versions(self) -> tuple[str, ...]:
+        return tuple(r.strategy.version for r in self._registrations if r.availability is StrategyAvailability.ACTIVE)
+
     def select(
         self,
         signals: Mapping[str, Signal],
         regime: Regime,
         health: Mapping[str, StrategyHealth],
+        allow_single_active_bootstrap: bool = False,
     ) -> StrategySelection:
         ranked: list[tuple[float, float, float, int, int, str, Strategy]] = []
         eligible_versions: list[str] = []
+        active_signals: list[StrategyRegistration] = []
 
         for registration in self._registrations:
             strategy = registration.strategy
+            if registration.availability is not StrategyAvailability.ACTIVE:
+                continue
             signal = signals.get(strategy.version)
             if signal is None or not signal.eligible:
                 continue
             if registration.allowed_regimes and regime not in registration.allowed_regimes:
                 continue
+            active_signals.append(registration)
             record = health.get(strategy.version, StrategyHealth(strategy.version))
             if not record.eligible_for_selection(regime):
                 continue
@@ -119,8 +128,12 @@ class StrategyPool:
                 )
             )
 
-        if not ranked:
-            return StrategySelection(None, "no_healthy_eligible_strategy", tuple(sorted(eligible_versions)))
+        if ranked:
+            ranked.sort(key=lambda item: (-item[0], -item[1], -item[2], -item[3], item[4], item[5]))
+            return StrategySelection(ranked[0][6], "selected_by_strategy_health", tuple(item[5] for item in ranked))
 
-        ranked.sort(key=lambda item: (-item[0], -item[1], -item[2], -item[3], item[4], item[5]))
-        return StrategySelection(ranked[0][6], "selected_by_strategy_health", tuple(item[5] for item in ranked))
+        if allow_single_active_bootstrap and len(active_signals) == 1:
+            strategy = active_signals[0].strategy
+            return StrategySelection(strategy, "single_active_strategy_bootstrap", (strategy.version,))
+
+        return StrategySelection(None, "no_healthy_eligible_strategy", tuple(sorted(eligible_versions)))
