@@ -29,6 +29,7 @@ class FyersHistoryConfig:
     request_timeout_seconds: float = 30.0
     max_retries: int = 4
     retry_backoff_seconds: float = 1.0
+    min_request_interval_seconds: float = 2.0
     max_days_per_request: int = 100
 
 
@@ -40,9 +41,21 @@ class FyersHistoricalClient:
             raise ValueError("FYERS app_id and access_token are required")
         if config.resolution != "5":
             raise ValueError("DoorDieAgent FYERS ingestion currently supports only 5-minute candles")
+        if config.min_request_interval_seconds < 0:
+            raise ValueError("min_request_interval_seconds must be non-negative")
         if not 1 <= config.max_days_per_request <= 100:
             raise ValueError("FYERS minute history requests must use 1..100 days per chunk")
         self.config = config
+        self._last_request_monotonic: float | None = None
+
+    def _pace(self) -> None:
+        if self._last_request_monotonic is None:
+            return
+        wait = self.config.min_request_interval_seconds - (
+            time.monotonic() - self._last_request_monotonic
+        )
+        if wait > 0:
+            time.sleep(wait)
 
     def _request(self, params: dict[str, str]) -> dict:
         query = urlencode(params)
@@ -53,6 +66,8 @@ class FyersHistoricalClient:
         )
         last_error: Exception | None = None
         for attempt in range(self.config.max_retries + 1):
+            self._pace()
+            self._last_request_monotonic = time.monotonic()
             try:
                 with urlopen(request, timeout=self.config.request_timeout_seconds) as response:
                     payload = json.load(response)
