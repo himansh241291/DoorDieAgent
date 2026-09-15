@@ -15,7 +15,7 @@ from nse_paper_agent.research.governance import build_manifest
 from nse_paper_agent.research.production import verify_persisted
 from nse_paper_agent.risk.engine import RiskEngine
 from nse_paper_agent.risk.health import DataHealth
-from nse_paper_agent.s entiment.provider import NeutralSentimentProvider
+from nse_paper_agent.sentiment.provider import NeutralSentimentProvider
 from nse_paper_agent.session import SessionGuard
 from nse_paper_agent.strategy.baseline import BaselineBreakoutStrategy
 from nse_paper_agent.strategy.portfolio import StrategyPool, StrategyRegistration, StrategyAvailability
