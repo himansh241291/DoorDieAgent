@@ -37,13 +37,18 @@ class StrategyHealth:
     version: str
     samples: int = 0
     expectancy: float | None = None
+    recent_expectancy: float | None = None
     max_drawdown: float | None = None
     confidence: float = 0.0
     regime_expectancy: Mapping[str, float] = field(default_factory=dict)
     availability: StrategyAvailability = StrategyAvailability.RESEARCH
+    selection_ready: bool = False
+    reason: str = "no_health_evidence"
 
     def eligible_for_selection(self, regime: Regime) -> bool:
         if self.availability is not StrategyAvailability.ACTIVE:
+            return False
+        if not self.selection_ready:
             return False
         if self.samples <= 0 or self.expectancy is None or self.max_drawdown is None:
             return False
@@ -102,7 +107,7 @@ class StrategyPool:
         ranked: list[tuple[float, float, float, int, int, str, Strategy]] = []
         eligible_versions: list[str] = []
         active_signals: list[StrategyRegistration] = []
-        unassessed_active: list[StrategyRegistration] = []
+        bootstrap_candidates: list[StrategyRegistration] = []
 
         for registration in self.active_registrations():
             strategy = registration.strategy
@@ -114,7 +119,12 @@ class StrategyPool:
             active_signals.append(registration)
             record = health.get(strategy.version)
             if record is None:
-                unassessed_active.append(registration)
+                bootstrap_candidates.append(registration)
+                continue
+            if record.availability is StrategyAvailability.PAUSED:
+                continue
+            if not record.selection_ready:
+                bootstrap_candidates.append(registration)
                 continue
             if not record.eligible_for_selection(regime):
                 continue
@@ -135,10 +145,9 @@ class StrategyPool:
             ranked.sort(key=lambda item: (-item[0], -item[1], -item[2], -item[3], item[4], item[5]))
             return StrategySelection(ranked[0][6], "selected_by_strategy_health", tuple(item[5] for item in ranked))
 
-        # Bootstrap is allowed only when the strategy has no health record yet.
-        # An explicit health record, including PAUSED/invalid/degraded evidence,
-        # must never be bypassed by the bootstrap path.
-        if allow_single_active_bootstrap and len(active_signals) == 1 and len(unassessed_active) == 1:
+        # A single ACTIVE strategy may trade during its evidence-collection phase.
+        # Once evidence explicitly marks it PAUSED, the bootstrap path is unavailable.
+        if allow_single_active_bootstrap and len(active_signals) == 1 and len(bootstrap_candidates) == 1:
             strategy = active_signals[0].strategy
             return StrategySelection(strategy, "single_active_strategy_bootstrap", (strategy.version,))
 
