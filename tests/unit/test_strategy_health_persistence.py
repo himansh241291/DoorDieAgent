@@ -5,7 +5,7 @@ from nse_paper_agent.persistence.db import Database
 from nse_paper_agent.persistence.repository import Repository
 
 
-def test_strategy_outcomes_use_entry_regime_not_exit_regime(tmp_path):
+def test_strategy_outcomes_include_complete_learning_context(tmp_path):
     db = Database(str(tmp_path / "state.sqlite3"))
     db.initialize()
     repo = Repository(db)
@@ -34,6 +34,10 @@ def test_strategy_outcomes_use_entry_regime_not_exit_regime(tmp_path):
     assert outcomes[0].version == "strategy-a"
     assert outcomes[0].net_pnl == 5.0
     assert outcomes[0].regime == Regime.RISK_ON.value
+    assert outcomes[0].symbol == "ABC"
+    assert outcomes[0].entry_ts == entry
+    assert outcomes[0].exit_reason == "TARGET"
+    assert outcomes[0].holding_seconds == 3600
     db.close()
 
 
