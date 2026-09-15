@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 from nse_paper_agent.domain.models import Bar
 
 FYERS_HISTORY_URL = "https://api-t1.fyers.in/data/history"
+FYERS_USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/131.0 Safari/537.36"
 IST = ZoneInfo("Asia/Kolkata")
 
 
@@ -61,7 +62,11 @@ class FyersHistoricalClient:
         query = urlencode(params)
         request = Request(
             f"{self.config.base_url}?{query}",
-            headers={"Authorization": f"{self.config.app_id}:{self.config.access_token}"},
+            headers={
+                "Authorization": f"{self.config.app_id}:{self.config.access_token}",
+                "User-Agent": FYERS_USER_AGENT,
+                "Accept": "application/json",
+            },
             method="GET",
         )
         last_error: Exception | None = None
