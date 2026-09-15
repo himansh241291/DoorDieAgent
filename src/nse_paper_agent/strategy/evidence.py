@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from math import isfinite
+from math import isfinite, sqrt
 from statistics import mean
 from typing import Iterable, Mapping
 from zoneinfo import ZoneInfo
@@ -35,6 +35,8 @@ class AggregateEvidence:
     gross_loss: float
     net_pnl: float
     max_losing_streak: int
+    max_drawdown: float | None
+    confidence: float
 
 
 @dataclass(frozen=True)
@@ -63,16 +65,18 @@ class StrategyEvidenceEngine:
     modify strategy code, or modify any risk control.
     """
 
-    def __init__(self, recent_window: int = 20):
+    def __init__(self, recent_window: int = 20, starting_equity: float = 50000.0):
         if recent_window <= 0:
             raise ValueError("recent_window must be positive")
+        if not isfinite(starting_equity) or starting_equity <= 0:
+            raise ValueError("starting_equity must be positive and finite")
         self.recent_window = recent_window
+        self.starting_equity = float(starting_equity)
 
-    @staticmethod
-    def _aggregate(rows: list[StrategyOutcome]) -> AggregateEvidence:
+    def _aggregate(self, rows: list[StrategyOutcome]) -> AggregateEvidence:
         pnls = [float(row.net_pnl) for row in rows if isfinite(float(row.net_pnl))]
         if not pnls:
-            return AggregateEvidence(0, None, None, None, None, None, 0.0, 0.0, 0.0, 0)
+            return AggregateEvidence(0, None, None, None, None, None, 0.0, 0.0, 0.0, 0, None, 0.0)
 
         wins = [pnl for pnl in pnls if pnl > 0]
         losses = [pnl for pnl in pnls if pnl < 0]
@@ -97,6 +101,22 @@ class StrategyEvidenceEngine:
             else:
                 streak = 0
 
+        equity = self.starting_equity
+        peak = equity
+        max_drawdown = 0.0
+        for pnl in pnls:
+            equity += pnl
+            peak = max(peak, equity)
+            if peak > 0:
+                max_drawdown = max(max_drawdown, (peak - equity) / peak)
+
+        confidence = 0.0
+        if len(pnls) >= 2 and expectancy > 0 and isfinite(expectancy):
+            variance = mean([(pnl - expectancy) ** 2 for pnl in pnls])
+            se = sqrt(variance / len(pnls))
+            if isfinite(se):
+                confidence = max(0.0, min(1.0, (expectancy - 1.96 * se) / expectancy))
+
         return AggregateEvidence(
             samples=len(pnls),
             expectancy=expectancy,
@@ -108,11 +128,12 @@ class StrategyEvidenceEngine:
             gross_loss=gross_loss,
             net_pnl=sum(pnls),
             max_losing_streak=max_streak,
+            max_drawdown=max_drawdown,
+            confidence=confidence,
         )
 
-    @staticmethod
-    def _bucket(rows: list[StrategyOutcome]) -> BucketEvidence:
-        aggregate = StrategyEvidenceEngine._aggregate(rows)
+    def _bucket(self, rows: list[StrategyOutcome]) -> BucketEvidence:
+        aggregate = self._aggregate(rows)
         return BucketEvidence(
             samples=aggregate.samples,
             expectancy=aggregate.expectancy,
