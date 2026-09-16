@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Mapping
 
 from nse_paper_agent.strategy.proposal import StrategyProposal
@@ -17,6 +17,8 @@ class StrategyValidationRequest:
     forbidden_change_scope: tuple[str, ...]
     hypothesis: str
     evidence: Mapping[str, float]
+    target: str | None = None
+    parameters: Mapping[str, object] = field(default_factory=dict)
     validation_status: str = "PENDING"
 
 
@@ -34,4 +36,6 @@ def build_validation_request(proposal: StrategyProposal) -> StrategyValidationRe
         forbidden_change_scope=proposal.forbidden_change_scope,
         hypothesis=proposal.hypothesis,
         evidence=dict(proposal.evidence),
+        target=proposal.target,
+        parameters=dict(proposal.parameters),
     )
