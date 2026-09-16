@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 from dataclasses import dataclass
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
@@ -58,9 +57,9 @@ class BoundedChallenger:
             bucket = target.upper()
             local_time = now.astimezone(IST).time()
             if bucket == "MORNING":
-                return local_time < time(11, 30)
+                return local_time >= time(11, 30)
             if bucket == "MIDDAY":
-                return not (time(11, 30) <= local_time < time(13, 30))
+                return local_time < time(11, 30) or local_time >= time(13, 30)
             if bucket == "AFTERNOON":
                 return local_time < time(13, 30)
             raise ValueError(f"unsupported time bucket target: {target}")
@@ -121,6 +120,8 @@ class BoundedChallenger:
 
 class ChallengerFactory:
     """Materialize only explicitly supported bounded challengers."""
+
+    SUPPORTED_SCOPES = BoundedChallenger.SUPPORTED_SCOPES
 
     def build(self, base_strategy, plan: ValidationPlan) -> ChallengerBuildResult:
         challenger = BoundedChallenger(base_strategy, plan)
