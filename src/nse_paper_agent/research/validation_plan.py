@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from hashlib import sha256
 import json
 from typing import Mapping
@@ -18,6 +18,8 @@ class ValidationPlan:
     forbidden_change_scope: tuple[str, ...]
     risk_config_hash: str
     data_window: str
+    target: str | None = None
+    parameters: Mapping[str, object] = field(default_factory=dict)
     split_policy: str = "chronological"
     min_trading_days: int = 60
     validation_status: str = "PLANNED"
@@ -80,5 +82,7 @@ class ValidationPlanner:
             forbidden_change_scope=request.forbidden_change_scope,
             risk_config_hash=self._hash_risk_config(risk_config),
             data_window=data_window,
+            target=request.target,
+            parameters=dict(request.parameters),
             min_trading_days=self.min_trading_days,
         )
