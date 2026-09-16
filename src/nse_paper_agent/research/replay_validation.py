@@ -18,7 +18,7 @@ from nse_paper_agent.paper_broker.broker import PaperBroker
 from nse_paper_agent.regime.engine import RegimeEngine
 from nse_paper_agent.regime.intelligence import MarketIntelligence
 from nse_paper_agent.research.challenger import ChallengerFactory
-from nse_paper_agent.research.validation_plan import ValidationPlan, ValidationPlanner
+from nse_paper_agent.research.validation_plan import ValidationPlan
 from nse_paper_agent.risk.engine import RiskEngine
 from nse_paper_agent.session import SessionGuard
 from nse_paper_agent.strategy.baseline import BaselineBreakoutStrategy
@@ -54,18 +54,17 @@ class ReplayValidationResult:
             "bars": self.bars,
             "trading_days": self.trading_days,
             "trades": self.trades,
-            "net_expectancy": self.expectancy,
+            "wins": self.wins,
+            "losses": self.losses,
+            "net_pnl": self.net_pnl,
             "expectancy": self.expectancy,
+            "net_expectancy": self.expectancy,
             "win_rate": self.win_rate,
             "max_drawdown": self.max_drawdown,
             "forced_exits": self.forced_exits,
             "stop_exits": self.stop_exits,
             "target_exits": self.target_exits,
             "final_cash": self.final_cash,
-            "wins": self.wins,
-            "losses": self.losses,
-            "net_pnl": self.net_pnl,
-            "bars": self.bars,
         }
 
 
@@ -384,9 +383,6 @@ def execute_validation(plan: ValidationPlan, bars_path: str, work_dir: str) -> V
         raise ValueError("validation plan risk configuration does not match canonical replay safety configuration")
 
     bars = load_bars_csv(bars_path)
-    actual_dates = sorted({bar.end.astimezone(IST).date().isoformat() for bar in bars})
-    if not actual_dates:
-        raise ValueError("validation dataset contains no bars")
     dev_dates, holdout_dates = _split_dates(bars)
     if len(dev_dates) < plan.min_trading_days:
         raise ValueError(
