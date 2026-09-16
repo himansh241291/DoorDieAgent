@@ -1,7 +1,13 @@
 import pytest
 
 from nse_paper_agent.persistence.db import Database
+from nse_paper_agent.research.replay_validation import (
+    ReplayValidationResult,
+    _split_dates,
+    execute_validation,
+)
 from nse_paper_agent.research.validation import require_long_duration, validate_replay
+from nse_paper_agent.research.validation_plan import ValidationPlan
 
 
 def test_replay_validation_calculates_trade_and_drawdown_metrics(tmp_path):
@@ -45,3 +51,65 @@ def test_long_duration_gate_rejects_short_replay():
     with pytest.raises(ValueError, match="insufficient replay duration"):
         require_long_duration(result, 60)
     db.close()
+
+
+def test_split_dates_is_chronological():
+    from datetime import datetime, timezone
+    from zoneinfo import ZoneInfo
+
+    class B:
+        def __init__(self, value):
+            self.end = value
+
+    ist = ZoneInfo("Asia/Kolkata")
+    bars = [
+        B(datetime(2026, 1, day, 10, 0, tzinfo=ist).astimezone(timezone.utc))
+        for day in range(1, 11)
+    ]
+    dev, holdout = _split_dates(bars)
+    assert dev == [f"2026-01-{day:02d}" for day in range(1, 8)]
+    assert holdout == [f"2026-01-{day:02d}" for day in range(8, 11)]
+
+
+def test_result_as_dict_contains_validation_metrics():
+    result = ReplayValidationResult(
+        "holdout", "2026-08-01", "2026-08-31", 100, 20, 10, 4, 6,
+        -120.0, -12.0, 0.4, 0.03, 8, 2, 0, 49880.0,
+    )
+    data = result.as_dict()
+    assert data["split"] == "holdout"
+    assert data["trades"] == 10
+    assert data["net_expectancy"] == -12.0
+    assert data["max_drawdown"] == 0.03
+
+
+def test_execute_validation_requires_target(tmp_path):
+    plan = ValidationPlan(
+        proposal_id="p1",
+        base_version="baseline-breakout-v1",
+        challenger_version="baseline-breakout-v1-challenger-2",
+        hypothesis="test",
+        allowed_change_scope="time_of_day_eligibility",
+        forbidden_change_scope=("risk_limits",),
+        risk_config_hash="x",
+        data_window="2025-09-15/2026-09-14",
+        target=None,
+    )
+    with pytest.raises(ValueError, match="requires a challenger target"):
+        execute_validation(plan, "missing.csv", str(tmp_path))
+
+
+def test_execute_validation_rejects_unsupported_scope(tmp_path):
+    plan = ValidationPlan(
+        proposal_id="p1",
+        base_version="baseline-breakout-v1",
+        challenger_version="baseline-breakout-v1-challenger-2",
+        hypothesis="test",
+        allowed_change_scope="risk_limits",
+        forbidden_change_scope=("hard_stop",),
+        risk_config_hash="x",
+        data_window="2025-09-15/2026-09-14",
+        target="x",
+    )
+    with pytest.raises(ValueError, match="unsupported validation scope"):
+        execute_validation(plan, "missing.csv", str(tmp_path))
