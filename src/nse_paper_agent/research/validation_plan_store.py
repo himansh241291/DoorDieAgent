@@ -11,6 +11,9 @@ class ValidationPlanStore:
 
     def __init__(self, db):
         self.db = db
+        self._ensure_schema()
+
+    def _ensure_schema(self) -> None:
         self.db.conn.execute(
             """
             CREATE TABLE IF NOT EXISTS strategy_validation_plans(
@@ -22,6 +25,8 @@ class ValidationPlanStore:
                 forbidden_change_scope_json TEXT NOT NULL,
                 risk_config_hash TEXT NOT NULL,
                 data_window TEXT NOT NULL,
+                target TEXT,
+                parameters_json TEXT NOT NULL DEFAULT '{}',
                 split_policy TEXT NOT NULL,
                 min_trading_days INTEGER NOT NULL,
                 validation_status TEXT NOT NULL,
@@ -29,6 +34,11 @@ class ValidationPlanStore:
             )
             """
         )
+        columns = {row["name"] for row in self.db.conn.execute("PRAGMA table_info(strategy_validation_plans)").fetchall()}
+        if "target" not in columns:
+            self.db.conn.execute("ALTER TABLE strategy_validation_plans ADD COLUMN target TEXT")
+        if "parameters_json" not in columns:
+            self.db.conn.execute("ALTER TABLE strategy_validation_plans ADD COLUMN parameters_json TEXT NOT NULL DEFAULT '{}'")
 
     def save(self, plan: ValidationPlan, created_at: datetime | None = None) -> bool:
         created_at = created_at or datetime.now(timezone.utc)
@@ -37,9 +47,9 @@ class ValidationPlanStore:
             INSERT OR IGNORE INTO strategy_validation_plans(
                 proposal_id, base_version, challenger_version, hypothesis,
                 allowed_change_scope, forbidden_change_scope_json,
-                risk_config_hash, data_window, split_policy, min_trading_days,
-                validation_status, created_at_utc
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+                risk_config_hash, data_window, target, parameters_json,
+                split_policy, min_trading_days, validation_status, created_at_utc
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 plan.proposal_id,
@@ -50,6 +60,8 @@ class ValidationPlanStore:
                 json.dumps(list(plan.forbidden_change_scope), sort_keys=True),
                 plan.risk_config_hash,
                 plan.data_window,
+                plan.target,
+                json.dumps(dict(plan.parameters), sort_keys=True, default=str),
                 plan.split_policy,
                 plan.min_trading_days,
                 plan.validation_status,
@@ -74,6 +86,8 @@ class ValidationPlanStore:
             forbidden_change_scope=tuple(json.loads(row["forbidden_change_scope_json"])),
             risk_config_hash=row["risk_config_hash"],
             data_window=row["data_window"],
+            target=row["target"],
+            parameters=json.loads(row["parameters_json"]),
             split_policy=row["split_policy"],
             min_trading_days=row["min_trading_days"],
             validation_status=row["validation_status"],
