@@ -68,10 +68,10 @@ class ValidationPlanner:
             raise ValueError("data window is required")
 
         forbidden = set(request.forbidden_change_scope)
-        if request.allowed_change_scope in forbidden:
-            raise ValueError("allowed change scope overlaps forbidden scope")
         if not self.REQUIRED_SAFETY_SCOPES.issubset(forbidden):
             raise ValueError("validation request does not freeze the complete safety envelope")
+        if request.allowed_change_scope in forbidden:
+            raise ValueError("allowed change scope overlaps forbidden scope")
 
         return ValidationPlan(
             proposal_id=request.proposal_id,
