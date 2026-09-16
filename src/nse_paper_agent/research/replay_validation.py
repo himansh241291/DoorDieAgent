@@ -195,7 +195,7 @@ def _run_split(
     db.initialize()
     repo = Repository(db)
     repo.set_cash(cfg["account"]["starting_capital"])
-    repo.set_state("daily_start_equity", cfg["account"]["starting_capital"])
+    repo.db.set_state("daily_start_equity", cfg["account"]["starting_capital"])
     broker = PaperBroker(cfg, repo)
     risk = RiskEngine(cfg, repo)
     session = SessionGuard(cfg)
