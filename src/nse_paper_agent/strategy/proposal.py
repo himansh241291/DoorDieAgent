@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Mapping
 
 from nse_paper_agent.strategy.diagnosis import DiagnosisFinding, StrategyDiagnosis
@@ -18,6 +18,8 @@ class StrategyProposal:
     evidence: Mapping[str, float]
     allowed_change_scope: str
     forbidden_change_scope: tuple[str, ...]
+    target: str | None = None
+    parameters: Mapping[str, object] = field(default_factory=dict)
     status: str = "PROPOSED"
 
 
@@ -53,19 +55,28 @@ class StrategyProposalEngine:
 
     @staticmethod
     def _proposal_id(base_version: str, finding: DiagnosisFinding, index: int) -> str:
-        return f"{base_version}:{finding.code}:{index + 1}"
+        target = finding.target or "global"
+        return f"{base_version}:{finding.code}:{target}:{index + 1}"
 
     @staticmethod
-    def _proposed_version(base_version: str, index: int) -> str:
+    def _proposed_version(base_version: str, finding: DiagnosisFinding, index: int) -> str:
+        target = (finding.target or "global").lower().replace(" ", "-")
         suffix = index + 2
-        return f"{base_version}-challenger-{suffix}"
+        return f"{base_version}-challenger-{suffix}-{target}"
+
+    @staticmethod
+    def _parameters(finding: DiagnosisFinding) -> dict[str, object]:
+        parameters: dict[str, object] = {}
+        if finding.target is not None:
+            parameters["target"] = finding.target
+        return parameters
 
     def _from_finding(self, diagnosis: StrategyDiagnosis, finding: DiagnosisFinding, index: int) -> StrategyProposal:
         scope = self._SCOPES.get(finding.code, "bounded_strategy_logic")
         return StrategyProposal(
             proposal_id=self._proposal_id(diagnosis.version, finding, index),
             base_version=diagnosis.version,
-            proposed_version=self._proposed_version(diagnosis.version, index),
+            proposed_version=self._proposed_version(diagnosis.version, finding, index),
             finding_code=finding.code,
             severity=finding.severity,
             hypothesis=finding.hypothesis,
@@ -73,6 +84,8 @@ class StrategyProposalEngine:
             evidence=dict(finding.metrics),
             allowed_change_scope=scope,
             forbidden_change_scope=self.FORBIDDEN_SCOPES,
+            target=finding.target,
+            parameters=self._parameters(finding),
         )
 
     def propose(self, diagnosis: StrategyDiagnosis) -> tuple[StrategyProposal, ...]:
