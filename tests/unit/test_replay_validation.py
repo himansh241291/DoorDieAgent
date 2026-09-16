@@ -113,3 +113,35 @@ def test_execute_validation_rejects_unsupported_scope(tmp_path):
     )
     with pytest.raises(ValueError, match="unsupported validation scope"):
         execute_validation(plan, "missing.csv", str(tmp_path))
+
+
+def test_execute_validation_rejects_unsupported_base_version(tmp_path):
+    plan = ValidationPlan(
+        proposal_id="p1",
+        base_version="not-the-baseline",
+        challenger_version="baseline-breakout-v1-challenger-time_of_day_eligibility-afternoon",
+        hypothesis="test",
+        allowed_change_scope="time_of_day_eligibility",
+        forbidden_change_scope=("risk_limits",),
+        risk_config_hash="x",
+        data_window="2025-09-15/2026-09-14",
+        target="AFTERNOON",
+    )
+    with pytest.raises(ValueError, match="unsupported validation base version"):
+        execute_validation(plan, "missing.csv", str(tmp_path))
+
+
+def test_execute_validation_rejects_risk_config_drift(tmp_path):
+    plan = ValidationPlan(
+        proposal_id="p1",
+        base_version="baseline-breakout-v1",
+        challenger_version="baseline-breakout-v1-challenger-time_of_day_eligibility-afternoon",
+        hypothesis="test",
+        allowed_change_scope="time_of_day_eligibility",
+        forbidden_change_scope=("risk_limits",),
+        risk_config_hash="not-the-canonical-hash",
+        data_window="2025-09-15/2026-09-14",
+        target="AFTERNOON",
+    )
+    with pytest.raises(ValueError, match="risk configuration does not match canonical"):
+        execute_validation(plan, "missing.csv", str(tmp_path))
