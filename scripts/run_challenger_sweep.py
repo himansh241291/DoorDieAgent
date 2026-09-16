@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 from nse_paper_agent.research.replay_validation import _config, execute_validation
@@ -19,9 +21,10 @@ FORBIDDEN = (
     "production_identity",
 )
 
+# RANGE_BOUND was already validated separately. RISK_OFF and DATA_DEGRADED are
+# already hard-blocked by baseline-breakout-v1, so eligibility challengers for
+# those states are behavioral no-ops and do not justify another full replay.
 EXPERIMENTS = (
-    ("regime_eligibility", "RISK_OFF", "Exclude RISK_OFF entries and test whether avoiding risk-off market regimes improves the baseline strategy's out-of-sample expectancy."),
-    ("regime_eligibility", "DATA_DEGRADED", "Exclude DATA_DEGRADED entries and test whether avoiding degraded-data regimes improves the baseline strategy's out-of-sample expectancy."),
     ("symbol_eligibility", "NSE:RELIANCE-EQ", "Exclude NSE:RELIANCE-EQ entries and test whether avoiding this symbol improves the baseline strategy's out-of-sample expectancy."),
     ("symbol_eligibility", "NSE:TCS-EQ", "Exclude NSE:TCS-EQ entries and test whether avoiding this symbol improves the baseline strategy's out-of-sample expectancy."),
     ("symbol_eligibility", "NSE:HDFCBANK-EQ", "Exclude NSE:HDFCBANK-EQ entries and test whether avoiding this symbol improves the baseline strategy's out-of-sample expectancy."),
@@ -31,15 +34,19 @@ EXPERIMENTS = (
 )
 
 
-def run_experiment(scope: str, target: str, hypothesis: str, bars: str, root: Path) -> dict[str, object]:
+def _safe_name(scope: str, target: str) -> str:
     safe_target = target.lower().replace(":", "_").replace("/", "_").replace(" ", "_")
-    name = f"{scope}-{safe_target}"
+    return f"{scope}-{safe_target}"
+
+
+def run_experiment(scope: str, target: str, hypothesis: str, bars: str, root: Path) -> dict[str, object]:
+    name = _safe_name(scope, target)
     work_dir = root / "work" / name
     output = root / "results" / f"{name}.json"
     request = StrategyValidationRequest(
         proposal_id=f"sweep:{scope}:{target}",
         base_version="baseline-breakout-v1",
-        proposed_version=f"baseline-breakout-v1-challenger-{scope}-{safe_target}",
+        proposed_version=f"baseline-breakout-v1-challenger-{scope}-{target.lower().replace(':', '_').replace('/', '_').replace(' ', '_')}",
         allowed_change_scope=scope,
         forbidden_change_scope=FORBIDDEN,
         hypothesis=hypothesis,
@@ -57,48 +64,64 @@ def run_experiment(scope: str, target: str, hypothesis: str, bars: str, root: Pa
     return payload
 
 
+def summarize(name: str, payload: dict[str, object]) -> dict[str, object]:
+    dev = payload["development"]
+    holdout = payload["holdout"]
+    return {
+        "experiment": name,
+        "status": "PASS",
+        "dev_trades": dev["trades"],
+        "dev_net_pnl": dev["net_pnl"],
+        "dev_expectancy": dev["expectancy"],
+        "dev_drawdown": dev["max_drawdown"],
+        "holdout_trades": holdout["trades"],
+        "holdout_net_pnl": holdout["net_pnl"],
+        "holdout_expectancy": holdout["expectancy"],
+        "holdout_drawdown": holdout["max_drawdown"],
+    }
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run the bounded challenger validation sweep as one sequential job.")
+    parser = argparse.ArgumentParser(description="Run the bounded challenger validation sweep as one parallelized job.")
     parser.add_argument("--bars", required=True)
     parser.add_argument("--output-dir", default="validation-sweep")
-    parser.add_argument("--only", nargs="*", default=None, help="Optional experiment names, e.g. regime_eligibility-RISK_OFF")
+    parser.add_argument("--workers", type=int, default=min(4, os.cpu_count() or 1))
+    parser.add_argument("--only", nargs="*", default=None, help="Optional experiment names, e.g. symbol_eligibility-nse_reliance-eq")
     args = parser.parse_args()
+    if args.workers <= 0:
+        raise SystemExit("--workers must be positive")
 
     root = Path(args.output_dir)
     root.mkdir(parents=True, exist_ok=True)
     selected = set(args.only) if args.only else None
+    experiments = [item for item in EXPERIMENTS if selected is None or _safe_name(item[0], item[1]) in selected]
     summary: list[dict[str, object]] = []
 
-    for scope, target, hypothesis in EXPERIMENTS:
-        safe_target = target.lower().replace(":", "_").replace("/", "_").replace(" ", "_")
-        name = f"{scope}-{safe_target}"
-        if selected is not None and name not in selected:
-            continue
-        print(f"\n=== RUNNING {name} ===", flush=True)
-        try:
-            payload = run_experiment(scope, target, hypothesis, args.bars, root)
-            dev = payload["development"]
-            holdout = payload["holdout"]
-            row = {
-                "experiment": name,
-                "status": "PASS",
-                "dev_trades": dev["trades"],
-                "dev_net_pnl": dev["net_pnl"],
-                "dev_expectancy": dev["expectancy"],
-                "dev_drawdown": dev["max_drawdown"],
-                "holdout_trades": holdout["trades"],
-                "holdout_net_pnl": holdout["net_pnl"],
-                "holdout_expectancy": holdout["expectancy"],
-                "holdout_drawdown": holdout["max_drawdown"],
-            }
-        except Exception as exc:
-            row = {"experiment": name, "status": "ERROR", "error": str(exc)}
-            summary.append(row)
-            print(f"ERROR: {exc}", flush=True)
-            continue
-        summary.append(row)
-        print(json.dumps(row, indent=2, sort_keys=True), flush=True)
+    if not experiments:
+        raise SystemExit("no experiments selected")
 
+    print(f"Running {len(experiments)} experiments with up to {min(args.workers, len(experiments))} workers", flush=True)
+    futures = {}
+    with ProcessPoolExecutor(max_workers=min(args.workers, len(experiments))) as pool:
+        for scope, target, hypothesis in experiments:
+            name = _safe_name(scope, target)
+            print(f"QUEUED {name}", flush=True)
+            futures[pool.submit(run_experiment, scope, target, hypothesis, args.bars, root)] = name
+
+        for future in as_completed(futures):
+            name = futures[future]
+            try:
+                payload = future.result()
+                row = summarize(name, payload)
+                summary.append(row)
+                print(f"\n=== COMPLETED {name} ===", flush=True)
+                print(json.dumps(row, indent=2, sort_keys=True), flush=True)
+            except Exception as exc:
+                row = {"experiment": name, "status": "ERROR", "error": str(exc)}
+                summary.append(row)
+                print(f"\n=== ERROR {name} ===\n{exc}", flush=True)
+
+    summary.sort(key=lambda item: str(item["experiment"]))
     summary_path = root / "summary.json"
     summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
     print(f"\nsummary={summary_path}")
