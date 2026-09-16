@@ -24,6 +24,7 @@ class DiagnosisFinding:
     hypothesis: str
     samples: int
     metrics: Mapping[str, float] = field(default_factory=dict)
+    target: str | None = None
 
 
 @dataclass(frozen=True)
@@ -123,9 +124,8 @@ class StrategyDiagnosisEngine:
                         statement=f"Observed expectancy is negative in regime {regime}.",
                         hypothesis=f"Test a regime-specific eligibility rule that reduces exposure in {regime}.",
                         samples=bucket.samples,
-                        metrics={
-                            "regime_expectancy": float(bucket.expectancy),
-                        },
+                        metrics={"regime_expectancy": float(bucket.expectancy)},
+                        target=regime,
                     )
                 )
 
@@ -142,9 +142,8 @@ class StrategyDiagnosisEngine:
                         statement=f"Observed expectancy is negative in the {bucket_name.lower()} entry window.",
                         hypothesis=f"Test a time-of-day eligibility restriction for the {bucket_name.lower()} window.",
                         samples=bucket.samples,
-                        metrics={
-                            "time_bucket_expectancy": float(bucket.expectancy),
-                        },
+                        metrics={"time_bucket_expectancy": float(bucket.expectancy)},
+                        target=bucket_name,
                     )
                 )
 
@@ -161,9 +160,8 @@ class StrategyDiagnosisEngine:
                         statement=f"Observed expectancy is negative for {symbol}.",
                         hypothesis=f"Test whether excluding {symbol} improves out-of-sample stability without broadening exposure elsewhere.",
                         samples=bucket.samples,
-                        metrics={
-                            "symbol_expectancy": float(bucket.expectancy),
-                        },
+                        metrics={"symbol_expectancy": float(bucket.expectancy)},
+                        target=symbol,
                     )
                 )
 
