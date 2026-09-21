@@ -16,18 +16,16 @@ def _parse_ts(value: str) -> datetime:
 def _horizon_returns(
     bars,
     entry_ts: str,
-    exit_ts: str,
     entry_price: float,
 ) -> dict[str, float | None]:
     entry = _parse_ts(entry_ts)
-    exit_time = _parse_ts(exit_ts)
     result: dict[str, float | None] = {}
     for minutes in HORIZON_MINUTES:
         target = entry.timestamp() + minutes * 60
         value = None
-        for bar in bars:
+        for bar in path_bars:
             end = _parse_ts(bar["end_utc"])
-            if end > exit_time or end.timestamp() < target:
+            if end.timestamp() < target:
                 continue
             value = (float(bar["close"]) - entry_price) / entry_price
             break
@@ -41,7 +39,7 @@ def analyze_trade_path(conn, trade: sqlite3.Row) -> dict[str, object]:
     exit_ts = trade["exit_ts_utc"]
     entry_price = float(trade["entry_price"])
 
-    bars = conn.execute(
+    path_bars = conn.execute(
         """
         SELECT start_utc, end_utc, high, low, close
         FROM market_bars
@@ -85,7 +83,18 @@ def analyze_trade_path(conn, trade: sqlite3.Row) -> dict[str, object]:
         "mae": mae,
         "mae_minutes": mae_minutes,
         "forward_close_returns": _horizon_returns(
-            bars, entry_ts, exit_ts, entry_price
+            conn.execute(
+                """
+                SELECT end_utc, close
+                FROM market_bars
+                WHERE symbol = ?
+                  AND start_utc >= ?
+                ORDER BY end_utc
+                """,
+                (symbol, entry_ts),
+            ).fetchall(),
+            entry_ts,
+            entry_price,
         ),
     }
 
