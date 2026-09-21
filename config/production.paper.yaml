@@ -74,5 +74,6 @@ notifications:
   enabled: false
   webhook_url_env: NSE_PAPER_WEBHOOK_URL
 strategy:
+  allow_single_active_bootstrap: false
   production: /etc/nse-paper-agent/strategies/baseline_breakout_v1.yaml
   challengers: /etc/nse-paper-agent/strategies/challenger_examples.yaml
