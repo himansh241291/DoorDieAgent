@@ -1,7 +1,7 @@
 import json
 import sqlite3
 
-from scripts.analyze_strategy_family_economics import analyze_db, analyze_family
+from nse_paper_agent.research.strategy_family_economics import analyze_db, analyze_family
 
 
 def _make_db(path, trades, fills):
