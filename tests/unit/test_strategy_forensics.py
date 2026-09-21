@@ -58,3 +58,5 @@ def test_analyze_db_extracts_path_and_mfe_mae(tmp_path):
     assert trade["mae"] == -0.03
     assert trade["forward_close_returns"]["5m"] == 0.02
     assert trade["forward_close_returns"]["15m"] == -0.01
+    assert trade["forward_close_returns"]["60m"] == 0.04
+    assert trade["forward_close_returns"]["120m"] == 0.06
