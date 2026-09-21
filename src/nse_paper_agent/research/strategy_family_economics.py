@@ -23,7 +23,6 @@ def analyze_db(path: Path) -> dict[str, object]:
             SELECT qty, entry_price, exit_price, entry_fee, exit_fee,
                    gross_pnl, net_pnl, holding_seconds, exit_reason
             FROM closed_trades
-            ORDER BY id
             """
         ).fetchall()
         fills = conn.execute(
