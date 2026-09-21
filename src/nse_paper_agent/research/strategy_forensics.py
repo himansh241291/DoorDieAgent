@@ -23,7 +23,7 @@ def _horizon_returns(
     for minutes in HORIZON_MINUTES:
         target = entry.timestamp() + minutes * 60
         value = None
-        for bar in path_bars:
+        for bar in bars:
             end = _parse_ts(bar["end_utc"])
             if end.timestamp() < target:
                 continue
@@ -56,7 +56,7 @@ def analyze_trade_path(conn, trade: sqlite3.Row) -> dict[str, object]:
     mae = None
     mfe_minutes = None
     mae_minutes = None
-    for bar in bars:
+    for bar in path_bars:
         high_return = (float(bar["high"]) - entry_price) / entry_price
         low_return = (float(bar["low"]) - entry_price) / entry_price
         elapsed_minutes = (
@@ -68,6 +68,17 @@ def analyze_trade_path(conn, trade: sqlite3.Row) -> dict[str, object]:
         if mae is None or low_return < mae:
             mae = low_return
             mae_minutes = elapsed_minutes
+
+    forward_bars = conn.execute(
+        """
+        SELECT end_utc, close
+        FROM market_bars
+        WHERE symbol = ?
+          AND start_utc >= ?
+        ORDER BY end_utc
+        """,
+        (symbol, entry_ts),
+    ).fetchall()
 
     return {
         "symbol": symbol,
@@ -83,16 +94,7 @@ def analyze_trade_path(conn, trade: sqlite3.Row) -> dict[str, object]:
         "mae": mae,
         "mae_minutes": mae_minutes,
         "forward_close_returns": _horizon_returns(
-            conn.execute(
-                """
-                SELECT end_utc, close
-                FROM market_bars
-                WHERE symbol = ?
-                  AND start_utc >= ?
-                ORDER BY end_utc
-                """,
-                (symbol, entry_ts),
-            ).fetchall(),
+            forward_bars,
             entry_ts,
             entry_price,
         ),
@@ -108,7 +110,6 @@ def analyze_db(path: Path) -> dict[str, object]:
             SELECT symbol, entry_price, exit_price, entry_ts_utc, exit_ts_utc,
                    exit_reason, holding_seconds, net_pnl
             FROM closed_trades
-            ORDER BY id
             """
         ).fetchall()
         paths = [analyze_trade_path(conn, trade) for trade in trades]
