@@ -2,28 +2,37 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import datetime
 from pathlib import Path
 
 
 HORIZON_MINUTES = (5, 15, 30, 60, 120, 240)
 
 
-def _horizon_return(conn, symbol: str, entry_ts: str, entry_price: float, exit_ts: str, minutes: int):
-    row = conn.execute(
-        """
-        SELECT close
-        FROM market_bars
-        WHERE symbol = ?
-          AND end_utc > ?
-          AND end_utc <= datetime(?, ?)
-        ORDER BY end_utc
-        LIMIT 1
-        """,
-        (symbol, entry_ts, entry_ts, f"+{minutes} minutes"),
-    ).fetchone()
-    if row is None:
-        return None
-    return (float(row["close"]) - entry_price) / entry_price
+def _parse_ts(value: str) -> datetime:
+    return datetime.fromisoformat(value)
+
+
+def _horizon_returns(
+    bars,
+    entry_ts: str,
+    exit_ts: str,
+    entry_price: float,
+) -> dict[str, float | None]:
+    entry = _parse_ts(entry_ts)
+    exit_time = _parse_ts(exit_ts)
+    result: dict[str, float | None] = {}
+    for minutes in HORIZON_MINUTES:
+        target = entry.timestamp() + minutes * 60
+        value = None
+        for bar in bars:
+            end = _parse_ts(bar["end_utc"])
+            if end > exit_time or end.timestamp() < target:
+                continue
+            value = (float(bar["close"]) - entry_price) / entry_price
+            break
+        result[f"{minutes}m"] = value
+    return result
 
 
 def analyze_trade_path(conn, trade: sqlite3.Row) -> dict[str, object]:
@@ -44,6 +53,7 @@ def analyze_trade_path(conn, trade: sqlite3.Row) -> dict[str, object]:
         (symbol, entry_ts, exit_ts),
     ).fetchall()
 
+    entry = _parse_ts(entry_ts)
     mfe = None
     mae = None
     mfe_minutes = None
@@ -52,8 +62,7 @@ def analyze_trade_path(conn, trade: sqlite3.Row) -> dict[str, object]:
         high_return = (float(bar["high"]) - entry_price) / entry_price
         low_return = (float(bar["low"]) - entry_price) / entry_price
         elapsed_minutes = (
-            __import__("datetime").datetime.fromisoformat(bar["end_utc"])
-            - __import__("datetime").datetime.fromisoformat(entry_ts)
+            _parse_ts(bar["end_utc"]) - entry
         ).total_seconds() / 60.0
         if mfe is None or high_return > mfe:
             mfe = high_return
@@ -61,13 +70,6 @@ def analyze_trade_path(conn, trade: sqlite3.Row) -> dict[str, object]:
         if mae is None or low_return < mae:
             mae = low_return
             mae_minutes = elapsed_minutes
-
-    horizon = {
-        f"{minutes}m": _horizon_return(
-            conn, symbol, entry_ts, entry_price, exit_ts, minutes
-        )
-        for minutes in HORIZON_MINUTES
-    }
 
     return {
         "symbol": symbol,
@@ -82,7 +84,9 @@ def analyze_trade_path(conn, trade: sqlite3.Row) -> dict[str, object]:
         "mfe_minutes": mfe_minutes,
         "mae": mae,
         "mae_minutes": mae_minutes,
-        "forward_close_returns": horizon,
+        "forward_close_returns": _horizon_returns(
+            bars, entry_ts, exit_ts, entry_price
+        ),
     }
 
 
@@ -106,6 +110,7 @@ def analyze_db(path: Path) -> dict[str, object]:
         values = [float(v) for v in values if v is not None]
         return sum(values) / len(values) if values else None
 
+    horizons = [f"{minutes}m" for minutes in HORIZON_MINUTES]
     return {
         "db": str(path),
         "trades": len(paths),
@@ -116,7 +121,7 @@ def analyze_db(path: Path) -> dict[str, object]:
             "mean_mae": mean(p["mae"] for p in paths),
             "horizon_mean_returns": {
                 key: mean(p["forward_close_returns"][key] for p in paths)
-                for key in [f"{m}m" for m in HORIZON_MINUTES]
+                for key in horizons
             },
             "positive_return_rate": {
                 key: (
@@ -125,11 +130,17 @@ def analyze_db(path: Path) -> dict[str, object]:
                         and p["forward_close_returns"][key] > 0
                         for p in paths
                     )
-                    / sum(p["forward_close_returns"][key] is not None for p in paths)
-                    if any(p["forward_close_returns"][key] is not None for p in paths)
+                    / sum(
+                        p["forward_close_returns"][key] is not None
+                        for p in paths
+                    )
+                    if any(
+                        p["forward_close_returns"][key] is not None
+                        for p in paths
+                    )
                     else None
                 )
-                for key in [f"{m}m" for m in HORIZON_MINUTES]
+                for key in horizons
             },
         },
     }
@@ -142,13 +153,15 @@ def analyze_input_dir(input_dir: str) -> dict[str, object]:
         version = result_path.stem
         if version == "summary":
             continue
-        dev_db = root / "work" / version / "development.sqlite3"
-        holdout_db = root / "work" / version / "holdout.sqlite3"
         rows.append(
             {
                 "strategy_version": version,
-                "development": analyze_db(dev_db),
-                "holdout": analyze_db(holdout_db),
+                "development": analyze_db(
+                    root / "work" / version / "development.sqlite3"
+                ),
+                "holdout": analyze_db(
+                    root / "work" / version / "holdout.sqlite3"
+                ),
             }
         )
     if not rows:
