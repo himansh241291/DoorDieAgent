@@ -30,7 +30,7 @@ class TradingAgent:
             StrategyRegistration(strategy=strategy)
         ])
         self.strategy_health_engine = strategy_health_engine or StrategyHealthEngine()
-        self._bootstrap_single_strategy = len(self.strategy_pool.active_versions()) == 1
+        self._bootstrap_single_strategy = bool(cfg.get("strategy", {}).get("allow_single_active_bootstrap", False)) and len(self.strategy_pool.active_versions()) == 1
 
         market_cfg = cfg.get("market", {})
         self.intelligence = MarketIntelligence(
