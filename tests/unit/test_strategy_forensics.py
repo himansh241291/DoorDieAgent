@@ -1,5 +1,7 @@
 import sqlite3
 
+import pytest
+
 from nse_paper_agent.research.strategy_forensics import analyze_db
 
 
@@ -39,9 +41,11 @@ def _db(path):
         ("TEST","2026-01-01T10:15:00+00:00","2026-01-01T10:20:00+00:00",99,98,98.5),
         ("TEST","2026-01-01T10:20:00+00:00","2026-01-01T10:25:00+00:00",100,98,99),
         ("TEST","2026-01-01T10:25:00+00:00","2026-01-01T10:30:00+00:00",100,98,99),
+        ("TEST","2026-01-01T10:30:00+00:00","2026-01-01T10:35:00+00:00",100,98,99.5),
         ("TEST","2026-01-01T10:55:00+00:00","2026-01-01T11:00:00+00:00",104,103,104),
         ("TEST","2026-01-01T11:25:00+00:00","2026-01-01T11:30:00+00:00",106,105,106),
         ("TEST","2026-01-01T11:55:00+00:00","2026-01-01T12:00:00+00:00",108,105,106),
+        ("TEST","2026-01-01T12:25:00+00:00","2026-01-01T12:30:00+00:00",108,105,107),
     ]
     conn.executemany("INSERT INTO market_bars VALUES(?,?,?,?,?,?)", bars)
     conn.commit()
@@ -61,3 +65,5 @@ def test_analyze_db_extracts_path_and_mfe_mae(tmp_path):
     assert trade["forward_close_returns"]["15m"] == -0.02
     assert trade["forward_close_returns"]["60m"] == 0.04
     assert trade["forward_close_returns"]["120m"] == 0.06
+    assert trade["post_exit_close_returns"]["5m"] == pytest.approx((99.5 - 99.0) / 99.0)
+    assert trade["post_exit_close_returns"]["120m"] == pytest.approx((107.0 - 99.0) / 99.0)
