@@ -141,7 +141,6 @@ def analyze_split(dev_db: Path, holdout_db: Path) -> dict[str, object]:
                         if value is not None:
                             groups[_bucket(value, q1, q2)].append(row)
                     buckets[label] = {name: _summarize(group) for name, group in groups.items()}
-                high = [r["forward"]["30m"] for r in buckets["holdout"]["HIGH"] if False]
                 feature_out[feature] = {"q1": q1, "q2": q2, "buckets": buckets}
                 for horizon in HORIZONS:
                     low = [r["forward"][f"{horizon}m"] for r in hrows
@@ -170,7 +169,7 @@ def _candidate(feature: dict[str, object]) -> bool:
         high = feature["buckets"]["holdout"]["HIGH"]["samples"]
         diff = feature.get(f"high_minus_low_{horizon}")
         ci = feature.get(f"ci95_{horizon}")
-        if low >= MIN_BUCKET_SAMPLES and high >= MIN_BUCKET_SAMPLES and diff is not None and ci[0] > 0.0 and abs(diff) >= 0.001:
+        if low >= MIN_BUCKET_SAMPLES and high >= MIN_BUCKET_SAMPLES and diff is not None and ci[0] * ci[1] > 0.0 and abs(diff) >= 0.001:
             return True
     return False
 
