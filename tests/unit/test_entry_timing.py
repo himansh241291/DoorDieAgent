@@ -36,3 +36,24 @@ def test_bootstrap_ci_contains_observed_high_minus_low():
     observed = sum(high) / len(high) - sum(low) / len(low)
     lower, upper = _bootstrap_ci(high, low)
     assert lower <= observed <= upper
+
+
+def test_entry_timing_variant_filters_only_eligible_signal():
+    from datetime import datetime, timezone
+    from nse_paper_agent.domain.models import Signal
+    from scripts.experiment_entry_timing import EntryTimingVariant
+
+    class FakeStrategy:
+        version = "fake-v1"
+        def evaluate(self, *args, **kwargs):
+            return Signal("TEST", datetime.now(timezone.utc), self.version, True, "entry", metadata={"feature": 2.0})
+
+    blocked = EntryTimingVariant(FakeStrategy(), "feature", 1.0, "exclude_high").evaluate()
+    assert blocked.eligible is False
+    assert blocked.reason == "entry_timing_filter"
+
+    allowed = EntryTimingVariant(FakeStrategy(), "feature", 3.0, "exclude_high").evaluate()
+    assert allowed.eligible is True
+
+    required = EntryTimingVariant(FakeStrategy(), "feature", 1.0, "require_high").evaluate()
+    assert required.eligible is True
