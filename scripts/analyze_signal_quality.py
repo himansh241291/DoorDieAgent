@@ -12,16 +12,19 @@ def _pct(value):
     return f"{value:.3%}" if value is not None else "NA"
 
 
-def _print_split(split: str, feature: str, family: dict[str, object]) -> None:
-    buckets = family[split][feature]["buckets"]
+def _print_feature(split: str, feature: str, payload: dict[str, object]) -> None:
+    buckets = payload.get(split, {}).get(feature, {}).get("buckets", {})
     for name in ("LOW", "MID", "HIGH"):
-        row = buckets[name]
+        row = buckets.get(name)
+        if row is None:
+            continue
         print(
-            f"    {split:9} {feature:18} {name:4} "
+            f"    {split.upper():9} {feature:18} {name:4} "
             f"n={row['samples']:3d} "
             f"30m={_pct(row['forward_mean_returns']['30m']):>8} "
             f"60m={_pct(row['forward_mean_returns']['60m']):>8} "
-            f"120m={_pct(row['forward_mean_returns']['120m']):>8}"
+            f"120m={_pct(row['forward_mean_returns']['120m']):>8} "
+            f"actual={_pct(row['actual_expectancy']):>8}"
         )
 
 
@@ -44,11 +47,14 @@ def main() -> None:
         encoding="utf-8",
     )
 
-    for version, family in payload["families"].items():
+    for version, family_group in payload["families"].items():
         print(f"\n=== {version} ===")
-        for feature in sorted(family["development"]):
-            _print_split("DEVELOP", feature, family)
-            _print_split("HOLDOUT", feature, family)
+        strategies = family_group
+        for strategy_version, splits in strategies.items():
+            print(f"  strategy={strategy_version}")
+            for feature in sorted(splits.get("development", {})):
+                _print_feature("development", feature, splits)
+                _print_feature("holdout", feature, splits)
 
     print(f"\nWritten: {output}")
 
