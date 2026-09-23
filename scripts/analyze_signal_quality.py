@@ -12,6 +12,10 @@ def _pct(value):
     return f"{value:.3%}" if value is not None else "NA"
 
 
+def _money(value):
+    return f"₹{value:,.2f}" if value is not None else "NA"
+
+
 def _print_feature(split: str, feature: str, payload: dict[str, object]) -> None:
     buckets = payload.get(split, {}).get(feature, {}).get("buckets", {})
     for name in ("LOW", "MID", "HIGH"):
@@ -24,7 +28,7 @@ def _print_feature(split: str, feature: str, payload: dict[str, object]) -> None
             f"30m={_pct(row['forward_mean_returns']['30m']):>8} "
             f"60m={_pct(row['forward_mean_returns']['60m']):>8} "
             f"120m={_pct(row['forward_mean_returns']['120m']):>8} "
-            f"actual={_pct(row['actual_expectancy']):>8}"
+            f"actual={_money(row['actual_expectancy']):>12}"
         )
 
 
