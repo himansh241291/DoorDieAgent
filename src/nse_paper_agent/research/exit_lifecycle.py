@@ -18,7 +18,7 @@ DEFAULT_BUY_FEE = Decimal("20")
 DEFAULT_SELL_FEE = Decimal("20")
 DEFAULT_TIME_EXITS = (60, 120, 180, 240)
 DEFAULT_PROTECTION = (
-    ("MFE_PROTECT_0.50", Decimal("0.005"), Decimal("0")),
+    ("MFE_PROTECT_0.50_LOCK_0.00", Decimal("0.005"), Decimal("0")),
     ("MFE_PROTECT_0.75_LOCK_0.25", Decimal("0.0075"), Decimal("0.0025")),
 )
 DEFAULT_TRAILS = (
@@ -189,11 +189,7 @@ def simulate(
     if policy.startswith("MFE_PROTECT_"):
         parts = policy.split("_")
         protection_activation = Decimal(parts[2]) / Decimal("100")
-        protection_lock = (
-            Decimal("0")
-            if parts[3] == "0"
-            else Decimal(parts[5]) / Decimal("100")
-        )
+        protection_lock = Decimal(parts[4]) / Decimal("100")
 
     trail_activation: Decimal | None = None
     trail_giveback: Decimal | None = None
