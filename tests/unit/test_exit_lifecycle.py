@@ -51,7 +51,7 @@ def test_hard_stop_wins_over_research_exit():
 
 
 def test_mfe_protection_does_not_exit_on_trigger_bar():
-    result = simulate(_entry(), _bars(), "MFE_PROTECT_0.50")
+    result = simulate(_entry(), _bars(), "MFE_PROTECT_0.50_LOCK_0.00")
     assert result is not None
     assert result.reason == "EOD"
 
