@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from nse_paper_agent.research.entry_timing import _bucket, _candidate, _quantile
+from nse_paper_agent.research.entry_timing import _bootstrap_ci, _bucket, _candidate, _quantile
 
 
 def test_entry_timing_uses_three_development_buckets():
@@ -28,3 +28,11 @@ def test_candidate_requires_sample_and_ci_gate():
 def test_runner_is_syntactically_valid():
     runner = Path(__file__).parents[2] / "scripts" / "analyze_entry_timing.py"
     compile(runner.read_text(encoding="utf-8"), str(runner), "exec")
+
+
+def test_bootstrap_ci_contains_observed_high_minus_low():
+    high = [0.01, 0.02, 0.03, 0.015, 0.025, 0.018, 0.022, 0.027]
+    low = [-0.01, -0.02, -0.015, -0.005, -0.012, -0.018, -0.008, -0.014]
+    observed = sum(high) / len(high) - sum(low) / len(low)
+    lower, upper = _bootstrap_ci(high, low)
+    assert lower <= observed <= upper
