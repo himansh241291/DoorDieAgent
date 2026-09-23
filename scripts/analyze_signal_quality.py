@@ -30,23 +30,27 @@ def main() -> None:
         description="Analyze entry-signal quality using development-derived feature buckets."
     )
     parser.add_argument("--input-dir", default="strategy-family-sweep")
-    parser.add_argument("--output", default="strategy-family-sweep/signal-quality.json")
+    parser.add_argument(
+        "--output",
+        default="strategy-family-sweep/signal-quality.json",
+    )
     args = parser.parse_args()
 
     payload = analyze_input_dir(args.input_dir)
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    output.write_text(
+        json.dumps(payload, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
 
     for version, family in payload["families"].items():
-        print(f"
-=== {version} ===")
+        print(f"\n=== {version} ===")
         for feature in sorted(family["development"]):
             _print_split("DEVELOP", feature, family)
             _print_split("HOLDOUT", feature, family)
 
-    print(f"
-Written: {output}")
+    print(f"\nWritten: {output}")
 
 
 if __name__ == "__main__":
