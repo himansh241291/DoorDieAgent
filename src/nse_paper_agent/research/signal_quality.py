@@ -6,10 +6,12 @@ from dataclasses import dataclass
 from datetime import datetime
 from math import isfinite
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 
 HORIZONS = (30, 60, 120, 240)
 MIN_DEVELOPMENT_SAMPLES = 12
+IST = ZoneInfo("Asia/Kolkata")
 
 
 @dataclass(frozen=True)
@@ -18,6 +20,7 @@ class EntryRecord:
     strategy_version: str
     entry_ts: datetime
     net_pnl: float
+    entry_price: float
     features: dict[str, float]
 
 
@@ -33,7 +36,8 @@ def _finite(value) -> bool:
 
 
 def _time_bucket(ts: datetime) -> str:
-    minutes = ts.hour * 60 + ts.minute
+    local = ts.astimezone(IST)
+    minutes = local.hour * 60 + local.minute
     if minutes < 11 * 60 + 30:
         return "MORNING"
     if minutes < 13 * 60 + 30:
@@ -152,6 +156,7 @@ def _load_entries(db_path: Path) -> list[EntryRecord]:
                     strategy_version=str(trade["strategy_version"]),
                     entry_ts=datetime.fromisoformat(trade["entry_ts_utc"]),
                     net_pnl=float(trade["net_pnl"]),
+                    entry_price=float(trade["entry_price"]),
                     features=features,
                 )
             )
@@ -183,14 +188,7 @@ def _feature_summary(
     for name, rows in grouped.items():
         forward: dict[str, list[float]] = {f"{m}m": [] for m in HORIZONS}
         for row in rows:
-            values = _forward_returns(
-                conn,
-                row.symbol,
-                row.entry_ts,
-                next(iter([row.features.get("entry_price", None)]), None)
-                if False
-                else _entry_price(conn, row),
-            )
+            values = _forward_returns(conn, row.symbol, row.entry_ts, row.entry_price)
             for key, value in values.items():
                 if value is not None:
                     forward[key].append(value)
@@ -212,24 +210,6 @@ def _feature_summary(
             },
         }
     return output
-
-
-def _entry_price(conn: sqlite3.Connection, entry: EntryRecord) -> float:
-    row = conn.execute(
-        """
-        SELECT entry_price
-        FROM closed_trades
-        WHERE symbol = ?
-          AND strategy_version = ?
-          AND entry_ts_utc = ?
-        ORDER BY id
-        LIMIT 1
-        """,
-        (entry.symbol, entry.strategy_version, entry.entry_ts.isoformat()),
-    ).fetchone()
-    if row is None:
-        raise ValueError("entry price not found")
-    return float(row[0])
 
 
 def analyze_db(path: Path) -> dict[str, object]:
