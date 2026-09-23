@@ -84,16 +84,16 @@ def _forward(conn: sqlite3.Connection, row: dict[str, object]) -> dict[str, floa
     return out
 
 
-def _bootstrap_ci(values_a: list[float], values_b: list[float]) -> tuple[float, float]:
+def _bootstrap_ci(high: list[float], low: list[float]) -> tuple[float, float]:
+    if not high or not low:
+        return (None, None)
     import random
     rng = random.Random(BOOTSTRAP_SEED)
-    if not values_a or not values_b:
-        return (None, None)
     diffs = []
     for _ in range(BOOTSTRAP_ROUNDS):
-        a = [values_a[rng.randrange(len(values_a))] for _ in values_a]
-        b = [values_b[rng.randrange(len(values_b))] for _ in values_b]
-        diffs.append(sum(a) / len(a) - sum(b) / len(b))
+        high_sample = [high[rng.randrange(len(high))] for _ in high]
+        low_sample = [low[rng.randrange(len(low))] for _ in low]
+        diffs.append(sum(high_sample) / len(high_sample) - sum(low_sample) / len(low_sample))
     diffs.sort()
     return (
         diffs[int(0.025 * (len(diffs) - 1))],
@@ -154,7 +154,7 @@ def analyze_split(dev_db: Path, holdout_db: Path) -> dict[str, object]:
                     feature_out[feature][f"high_minus_low_{horizon}m"] = (
                         (sum(high) / len(high) - sum(low) / len(low)) if low and high else None
                     )
-                    feature_out[feature][f"ci95_{horizon}m"] = _bootstrap_ci(low, high) if low and high else (None, None)
+                    feature_out[feature][f"ci95_{horizon}m"] = _bootstrap_ci(high, low) if low and high else (None, None)
                 feature_out[feature]["candidate"] = _candidate(feature_out[feature])
             output[strategy] = feature_out
         return output
