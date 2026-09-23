@@ -40,8 +40,15 @@ def test_bootstrap_ci_contains_observed_high_minus_low():
 
 def test_entry_timing_variant_filters_only_eligible_signal():
     from datetime import datetime, timezone
+    from importlib.util import module_from_spec, spec_from_file_location
     from nse_paper_agent.domain.models import Signal
-    from scripts.experiment_entry_timing import EntryTimingVariant
+
+    runner = Path(__file__).parents[2] / "scripts" / "experiment_entry_timing.py"
+    spec = spec_from_file_location("experiment_entry_timing", runner)
+    assert spec is not None and spec.loader is not None
+    module = module_from_spec(spec)
+    spec.loader.exec_module(module)
+    EntryTimingVariant = module.EntryTimingVariant
 
     class FakeStrategy:
         version = "fake-v1"
