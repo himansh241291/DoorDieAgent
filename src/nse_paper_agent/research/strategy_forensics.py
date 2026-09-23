@@ -7,6 +7,7 @@ from pathlib import Path
 
 
 HORIZON_MINUTES = (5, 15, 30, 60, 120, 240)
+MFE_THRESHOLDS = (0.0025, 0.005, 0.0075, 0.01, 0.015, 0.02, 0.03, 0.05)
 
 
 def _parse_ts(value: str) -> datetime:
@@ -15,19 +16,19 @@ def _parse_ts(value: str) -> datetime:
 
 def _horizon_returns(
     bars,
-    entry_ts: str,
-    entry_price: float,
+    anchor_ts: str,
+    anchor_price: float,
 ) -> dict[str, float | None]:
-    entry = _parse_ts(entry_ts)
+    anchor = _parse_ts(anchor_ts)
     result: dict[str, float | None] = {}
     for minutes in HORIZON_MINUTES:
-        target = entry.timestamp() + minutes * 60
+        target = anchor.timestamp() + minutes * 60
         value = None
         for bar in bars:
             end = _parse_ts(bar["end_utc"])
             if end.timestamp() < target:
                 continue
-            value = (float(bar["close"]) - entry_price) / entry_price
+            value = (float(bar["close"]) - anchor_price) / anchor_price
             break
         result[f"{minutes}m"] = value
     return result
@@ -38,6 +39,7 @@ def analyze_trade_path(conn, trade: sqlite3.Row) -> dict[str, object]:
     entry_ts = trade["entry_ts_utc"]
     exit_ts = trade["exit_ts_utc"]
     entry_price = float(trade["entry_price"])
+    exit_price = float(trade["exit_price"])
 
     path_bars = conn.execute(
         """
@@ -80,15 +82,27 @@ def analyze_trade_path(conn, trade: sqlite3.Row) -> dict[str, object]:
         (symbol, entry_ts),
     ).fetchall()
 
+    post_exit_bars = conn.execute(
+        """
+        SELECT end_utc, close
+        FROM market_bars
+        WHERE symbol = ?
+          AND start_utc >= ?
+        ORDER BY end_utc
+        """,
+        (symbol, exit_ts),
+    ).fetchall()
+
     return {
         "symbol": symbol,
         "entry_ts": entry_ts,
         "exit_ts": exit_ts,
         "entry_price": entry_price,
-        "exit_price": float(trade["exit_price"]),
+        "exit_price": exit_price,
         "exit_reason": str(trade["exit_reason"]),
         "net_pnl": float(trade["net_pnl"]),
         "holding_minutes": float(trade["holding_seconds"]) / 60.0,
+        "exit_gross_return": (exit_price - entry_price) / entry_price,
         "mfe": mfe,
         "mfe_minutes": mfe_minutes,
         "mae": mae,
@@ -97,6 +111,11 @@ def analyze_trade_path(conn, trade: sqlite3.Row) -> dict[str, object]:
             forward_bars,
             entry_ts,
             entry_price,
+        ),
+        "post_exit_close_returns": _horizon_returns(
+            post_exit_bars,
+            exit_ts,
+            exit_price,
         ),
     }
 
@@ -120,6 +139,10 @@ def analyze_db(path: Path) -> dict[str, object]:
         values = [float(v) for v in values if v is not None]
         return sum(values) / len(values) if values else None
 
+    def positive_rate(values):
+        values = [float(v) for v in values if v is not None]
+        return sum(v > 0 for v in values) / len(values) if values else None
+
     horizons = [f"{minutes}m" for minutes in HORIZON_MINUTES]
     return {
         "db": str(path),
@@ -127,6 +150,7 @@ def analyze_db(path: Path) -> dict[str, object]:
         "trade_paths": paths,
         "summary": {
             "mean_holding_minutes": mean(p["holding_minutes"] for p in paths),
+            "mean_exit_gross_return": mean(p["exit_gross_return"] for p in paths),
             "mean_mfe": mean(p["mfe"] for p in paths),
             "mean_mae": mean(p["mae"] for p in paths),
             "horizon_mean_returns": {
@@ -134,23 +158,35 @@ def analyze_db(path: Path) -> dict[str, object]:
                 for key in horizons
             },
             "positive_return_rate": {
-                key: (
-                    sum(
-                        p["forward_close_returns"][key] is not None
-                        and p["forward_close_returns"][key] > 0
-                        for p in paths
-                    )
-                    / sum(
-                        p["forward_close_returns"][key] is not None
-                        for p in paths
-                    )
-                    if any(
-                        p["forward_close_returns"][key] is not None
-                        for p in paths
-                    )
-                    else None
+                key: positive_rate(
+                    p["forward_close_returns"][key] for p in paths
                 )
                 for key in horizons
+            },
+            "post_exit_horizon_mean_returns": {
+                key: mean(p["post_exit_close_returns"][key] for p in paths)
+                for key in horizons
+            },
+            "post_exit_positive_return_rate": {
+                key: positive_rate(
+                    p["post_exit_close_returns"][key] for p in paths
+                )
+                for key in horizons
+            },
+            "mfe_threshold_hit_rate": {
+                f"{threshold:.2%}": (
+                    sum(
+                        p["mfe"] is not None and p["mfe"] >= threshold
+                        for p in paths
+                    ) / len(paths)
+                    if paths
+                    else None
+                )
+                for threshold in MFE_THRESHOLDS
+            },
+            "exit_reason_counts": {
+                reason: sum(p["exit_reason"] == reason for p in paths)
+                for reason in sorted({p["exit_reason"] for p in paths})
             },
         },
     }
